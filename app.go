@@ -29,6 +29,9 @@ func NewApp() *App { return &App{} }
 
 func (a *App) startup(ctx context.Context) { a.ctx = ctx }
 
+// Version is the app version from the VERSION file, e.g. "0.1".
+func (a *App) Version() string { return appVersion }
+
 // DefaultRoots is the user's home directory.
 func (a *App) DefaultRoots() []string {
 	home, err := os.UserHomeDir()

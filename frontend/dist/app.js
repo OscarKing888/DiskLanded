@@ -149,6 +149,7 @@ document.addEventListener("click", async (e) => {
 window.addEventListener("DOMContentLoaded", async () => {
   window.runtime.EventsOn("scan:progress", onProgress);
   window.runtime.EventsOn("scan:done", onDone);
+  $("version").textContent = "v" + (await api().Version());
   roots = await api().DefaultRoots();
   renderRoots();
 });

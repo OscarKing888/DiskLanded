@@ -27,7 +27,7 @@ func main() {
 		OnStartup: app.startup,
 		Bind:      []interface{}{app},
 		Mac: &mac.Options{
-			About: &mac.AboutInfo{Title: "新占 DiskLanded", Message: "磁盘空间被谁占着，哪些大文件是新来的。"},
+			About: &mac.AboutInfo{Title: "新占 DiskLanded v" + appVersion, Message: "磁盘空间被谁占着，哪些大文件是新来的。"},
 		},
 	})
 	if err != nil {

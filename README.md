@@ -46,6 +46,19 @@ wails build -skipbindings -tags webkit2_41
 
 运行时依赖：Windows 需要 WebView2（Windows 11 和更新过的 Windows 10 自带）；Linux 需要系统的 WebKitGTK 4.1（`libwebkit2gtk-4.1-0`，主流桌面发行版默认安装）。
 
+## 版本与发布
+
+- 版本号只在根目录 `VERSION` 维护（当前 `0.1`），编译时嵌入，显示在窗口顶部「新占」旁（如 `v0.1`）。
+- 发布：修改 `VERSION` 并合入 `main` 后，对该提交打附注 Tag `v<VERSION>` 并推送，例如
+  `git tag -a v0.1 -m "DiskLanded v0.1" && git push origin v0.1`。
+- CI 只在推送 `v*` Tag（或手动触发）时运行：先校验 Tag 与 `VERSION` 一致，再在三种系统上测试、构建、启动，
+  产物名为 `DiskLanded-v<版本>-<系统>`。
+
+## 协作流程
+
+每次修改使用独立 worktree 与 `session/*` 分支，验证后自动合并到 `main`，详见
+`.codex/rules/feature-branch-merge.md`。
+
 ## 测试
 
 ```sh
@@ -54,4 +67,4 @@ DISKLANDED_HOME_SCAN=1 go test -v -run TestHomeScan ./internal/scan   # 扫描�
 DISKLANDED_GUI=1 go test -v ./internal/reveal                    # 在 Finder / 资源管理器中实际定位文件
 ```
 
-权限测试在 Unix 上需要以非 root 用户运行。`.github/workflows/build.yml` 在三种系统上执行以上测试、构建并启动应用。
+权限测试在 Unix 上需要以非 root 用户运行。`.github/workflows/build.yml` 在推送版本 Tag 时于三种系统上执行以上测试、构建并启动应用。
