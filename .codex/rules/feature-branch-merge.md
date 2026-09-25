@@ -106,6 +106,16 @@ DiskLanded 仓库级 Git 协议。完整规则只在本文件维护；`AGENTS.md
 - 确认安全后在主 worktree 执行 `git worktree remove <worktree-path>`，再持锁复核分支尖端未变、
   仍被 `main` 包含且未被任何 worktree 检出，执行 `git branch -d <branch>`，最后释放锁。拒绝删除
   时保留分支，不改用 `-D`。
+- `git branch -d` 判断「已合并」时比较的是分支的 upstream（若有），否则是**执行命令所在 worktree
+  的 HEAD**，而不是 `main`。因此必须在检出 `main` 的 worktree 中执行：
+  - `main` 已被某个 worktree 检出：用 `git -C <main-worktree> branch -d <branch>`。
+  - `main` 未被任何 worktree 检出（如云端主目录停在平台预建的 `claude/...` 分支）：持锁用
+    `git worktree add <临时路径> main` 建临时 worktree，在其中执行 `git branch -d <branch>`，再
+    `git worktree remove <临时路径>`。临时路径放在仓库之外的会话临时目录或 `.worktrees/` 下，
+    用完即删。
+  - 不要为此切换主目录当前分支，不要给任务分支设置 upstream，也不要因 `-d` 在其他 HEAD 下
+    报「not fully merged」就改用 `-D`：只要显式的 `git merge-base --is-ancestor <branch> main`
+    通过，就按上述方式换到检出 `main` 的 worktree 重试。
 - 任一步发现未合并提交、引用变化、未提交内容、占用或清理失败，保留剩余资源并如实报告。禁止
   用 `--force`、`git clean -fdx`、递归删除目录或强制删除 ref 绕过保护。以后继续修改从最新
   `main` 新建任务分支。
