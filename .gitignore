@@ -34,3 +34,6 @@ go.work.sum
 # Wails build output and generated bindings
 build/bin/
 frontend/wailsjs/
+
+# Session worktrees (see .codex/rules/feature-branch-merge.md)
+.worktrees/
