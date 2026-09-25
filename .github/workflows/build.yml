@@ -1,0 +1,85 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            wails_flags: -tags webkit2_41
+            artifact: build/bin/DiskLanded
+          - os: macos-latest
+            wails_flags: -platform darwin/universal
+            artifact: build/bin/DiskLanded.app
+          - os: windows-latest
+            wails_flags: ""
+            artifact: build/bin/DiskLanded.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev xvfb
+
+      - name: Vet
+        run: go vet ./internal/...
+
+      - name: Unit tests (tree totals, links, permission denied, timestamps, filters)
+        run: go test -count=1 -v ./internal/...
+
+      - name: Scan the real home directory
+        env:
+          DISKLANDED_HOME_SCAN: "1"
+        run: go test -count=1 -v -timeout 25m -run TestHomeScan ./internal/scan
+
+      - name: Reveal in the system file manager
+        if: runner.os != 'Linux'
+        continue-on-error: true
+        env:
+          DISKLANDED_GUI: "1"
+        run: go test -count=1 -v -run "Finder|Explorer|OpenArgs|CmdLine" ./internal/reveal
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
+
+      - name: Build app
+        run: wails build -skipbindings -trimpath ${{ matrix.wails_flags }}
+
+      - name: Launch smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          xvfb-run -a ./build/bin/DiskLanded & sleep 10
+          pgrep -x DiskLanded && pkill -x DiskLanded
+
+      - name: Launch smoke test (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          file build/bin/DiskLanded.app/Contents/MacOS/DiskLanded
+          open build/bin/DiskLanded.app; sleep 10
+          pgrep -x DiskLanded && pkill -x DiskLanded
+
+      - name: Launch smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath build\bin\DiskLanded.exe -PassThru
+          Start-Sleep 10
+          if ($p.HasExited) { throw "DiskLanded exited with $($p.ExitCode)" }
+          Get-Process -Id $p.Id | Format-List Name, Id, MainWindowTitle
+          Stop-Process -Id $p.Id
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DiskLanded-${{ runner.os }}
+          path: ${{ matrix.artifact }}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "DiskLanded",
+  "outputfilename": "DiskLanded",
+  "frontend:dir": "frontend",
+  "frontend:install": "",
+  "frontend:build": "",
+  "author": {
+    "name": "DiskLanded"
+  },
+  "info": {
+    "companyName": "DiskLanded",
+    "productName": "DiskLanded",
+    "productVersion": "0.1.0",
+    "copyright": "",
+    "comments": "新占：磁盘空间被谁占着，哪些大文件是新来的"
+  }
+}

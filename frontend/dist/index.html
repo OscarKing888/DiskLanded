@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>新占 DiskLanded</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo">新占</span><span class="sub">DiskLanded · 空间被谁占着，哪些大文件是新来的</span></div>
+  <div class="roots">
+    <ul id="rootList"></ul>
+    <div class="addRoot">
+      <input id="rootInput" type="text" placeholder="输入本地目录路径后回车添加" spellcheck="false">
+      <button id="addBtn" class="ghost">添加</button>
+      <button id="browseBtn" class="ghost">浏览…</button>
+      <button id="scanBtn" class="primary">扫描</button>
+      <button id="cancelBtn" class="danger" hidden>取消</button>
+    </div>
+    <div id="status" class="status">尚未扫描。</div>
+  </div>
+</header>
+
+<main>
+  <section>
+    <h2>卷概览</h2>
+    <div id="volumes" class="volumes"></div>
+  </section>
+
+  <section>
+    <div class="secHead">
+      <h2>大目录</h2>
+      <label>占用至少 <input id="dirMin" type="number" min="0.1" step="0.1" value="1"> GB</label>
+      <span id="dirCount" class="count"></span>
+    </div>
+    <div class="tableWrap">
+      <table>
+        <thead><tr><th class="num">占用</th><th>路径</th></tr></thead>
+        <tbody id="dirBody"><tr><td colspan="2" class="empty">扫描后显示</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="secHead">
+      <h2>新出现的大文件</h2>
+      <label>单个文件至少 <input id="fileMin" type="number" min="1" step="1" value="500"> MB</label>
+      <label>最近 <input id="fileDays" type="number" min="1" step="1" value="60"> 天内出现</label>
+      <span id="fileCount" class="count"></span>
+    </div>
+    <div class="tableWrap">
+      <table>
+        <thead><tr><th class="num">大小</th><th class="date">出现日期</th><th class="date">修改日期</th><th>路径</th></tr></thead>
+        <tbody id="fileBody"><tr><td colspan="4" class="empty">扫描后显示</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="failSec" hidden>
+    <details>
+      <summary id="failSummary"></summary>
+      <ul id="failList" class="failList"></ul>
+    </details>
+  </section>
+</main>
+<div id="toast" class="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
