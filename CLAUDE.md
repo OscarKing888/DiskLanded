@@ -2,6 +2,8 @@
 
 @AGENTS.md
 
+路径规则：`**`（功能 Git 流程）→ `.claude/rules/feature-branch-merge.md`。
+
 - 每次开始或恢复开发任务，先按 `.codex/rules/feature-branch-merge.md` 建立并记录本会话 worktree、
   任务分支和起始提交；不能因改动小、只改文档而省略。
 - 云端会话（`CLAUDE_CODE_REMOTE=true`）按该文件「云端会话」一节执行：平台预建的 `claude/...`
