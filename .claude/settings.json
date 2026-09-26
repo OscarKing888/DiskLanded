@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git fetch origin main)",
+      "Bash(git fetch origin main:main)",
+      "Bash(git worktree add -b session/*)",
+      "Bash(git worktree remove .worktrees/*)",
+      "Bash(git merge --no-edit *)",
+      "Bash(git merge --ff-only *)",
+      "Bash(git merge-base --is-ancestor *)",
+      "Bash(git ls-remote origin refs/heads/main)",
+      "Bash(git push origin *:refs/heads/main)",
+      "Bash(git push origin session/*)",
+      "Bash(git branch -d session/*)"
+    ],
+    "deny": [
+      "Bash(git push *--force*)",
+      "Bash(git push * -f*)",
+      "Bash(git push *+*)",
+      "Bash(git push *--delete*)",
+      "Bash(git push * -d *)",
+      "Bash(git push origin :*)",
+      "Bash(git push *--mirror*)",
+      "Bash(git push *--all*)",
+      "Bash(git push *--tags*)",
+      "Bash(git worktree remove *--force*)",
+      "Bash(git branch -D *)"
+    ]
+  }
+}
