@@ -58,6 +58,7 @@ function hoverHarness() {
     module: {exports:{}}, $, scanning: false, trashing: false,
     esc: s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])),
     differs: () => false, date: () => '2026-10-02',
+    toast: msg => { counters.toast = msg; }, document: {body: {dataset: {}}},
     requestAnimationFrame: fn => { frames.set(++serial,fn); return serial; },
     cancelAnimationFrame: id => frames.delete(id)
   });
@@ -233,4 +234,20 @@ test('file bubbles highlight alone or by folder group', () => {
   h.graph.highlight(null);
   assert(!svg.classes.has('dim'));
   assert(h.$('graphDetail').html.includes('横轴'));
+});
+
+test('collecting skips directories and adds a folder group of new files at once', () => {
+  const h=hoverHarness();
+  const {fileTimeline}=h.exports;
+  const data=fileTimeline([newFile('/u/a/1.bin',3,1),newFile('/u/a/2.bin',2,2),newFile('/u/b/3.bin',1,3)],60,now);
+  Object.assign(h.graph,{data,collected:new Map(),history:{dirs:{paths:[''],index:0}}});
+  h.graph.collect({path:'/u/a',name:'a',kind:'dir',alloc:5});
+  assert.equal(h.graph.collected.size,0,'directories must never be queued for deletion');
+  const group=data.root.children[0];
+  assert.deepEqual(h.graph.groupFiles(group).map(f=>f.path),['/u/a/1.bin','/u/a/2.bin']);
+  h.graph.collectMany(h.graph.groupFiles(group));
+  assert.deepEqual([...h.graph.collected.keys()],['/u/a/1.bin','/u/a/2.bin']);
+  assert.match(h.counters.toast,/2 个文件/);
+  h.exports.DiskGraph.prototype.removeCollected.call(h.graph,'/u/a/1.bin');
+  assert.deepEqual([...h.graph.collected.keys()],['/u/a/2.bin']);
 });

@@ -7,6 +7,7 @@ let scanning = false;
 let hasResult = false;
 let trashing = false;
 let fileQueryID = 0;
+let dirRows = [], fileRows = [];
 const graph = new DiskGraph();
 
 function setResultView(view) {
@@ -153,9 +154,10 @@ function countText(n, shown) { return n > shown ? `共 ${n.toLocaleString()} 条
 async function queryDirs() {
   if (!hasResult) return;
   const res = await api().QueryDirs(Math.round(num("dirMin", 1) * 1e9));
+  dirRows = res.rows;
   $("dirCount").textContent = countText(res.total, res.rows.length);
   $("dirBody").innerHTML = res.rows.length
-    ? res.rows.map((r) => `<tr>${sizeCell(r)}${pathCell(r.path)}</tr>`).join("")
+    ? res.rows.map((r, i) => `<tr data-row="${i}">${sizeCell(r)}${pathCell(r.path)}</tr>`).join("")
     : `<tr><td colspan="2" class="empty">没有达到阈值的目录</td></tr>`;
 }
 async function queryFiles() {
@@ -166,9 +168,10 @@ async function queryFiles() {
   const res = await api().QueryFiles(Math.round(mb * 1e6), Math.min(36500, Math.round(num("fileDays", 60))));
   // 删除或修改筛选条件后，忽略旧请求，避免已删除的文件重新出现在列表。
   if (queryID !== fileQueryID) return;
+  fileRows = res.rows;
   $("fileCount").textContent = countText(res.total, res.rows.length);
   $("fileBody").innerHTML = res.rows.length
-    ? res.rows.map((r) => `<tr>${sizeCell(r)}<td class="date">${date(r.appeared)}${r.appearedIsMtime
+    ? res.rows.map((r, i) => `<tr data-row="${i}">${sizeCell(r)}<td class="date">${date(r.appeared)}${r.appearedIsMtime
         ? `<span class="badge" title="该文件系统未提供创建时间，出现日期使用修改时间">修改时间</span>` : ""}</td><td class="date">${date(r.modified)}</td>${pathCell(r.path)}<td class="action"><button class="trash" data-path="${esc(r.path)}" title="移入系统回收站，可在回收站恢复" aria-label="删除 ${esc(r.path)}">删除</button></td></tr>`).join("")
     : `<tr><td colspan="5" class="empty">没有符合条件的文件</td></tr>`;
   updateTrashButtons();
@@ -224,6 +227,104 @@ document.addEventListener("click", async (e) => {
   e.preventDefault();
   try { await api().Reveal(a.dataset.path); } catch (err) { toast(String(err)); }
 });
+
+// ---------- context menu ----------
+// 右键文件或目录弹出菜单：文件可加入/移出待删除；目录不能删除（产品约束），只提供查看与定位。
+function baseName(p) { return p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || p; }
+function rowNode(r, kind) { return { ...r, name: baseName(r.path), kind, children: [] }; }
+function contextNode(el) {
+  const row = el.closest("#dirBody tr[data-row], #fileBody tr[data-row]");
+  if (row) {
+    const dirs = row.parentElement.id === "dirBody", r = (dirs ? dirRows : fileRows)[+row.dataset.row];
+    return r ? { node: rowNode(r, dirs ? "dir" : "file"), from: "list" } : null;
+  }
+  const chip = el.closest("#collectorItems > span[data-path]");
+  if (chip) return graph.collected.has(chip.dataset.path) ? { node: graph.collected.get(chip.dataset.path), from: "collector" } : null;
+  const node = graph.nodeFromElement(el);
+  return node && node.kind !== "other" ? { node, from: "graph" } : null;
+}
+async function copyPath(path) {
+  try {
+    if (window.runtime && window.runtime.ClipboardSetText) await window.runtime.ClipboardSetText(path);
+    else await navigator.clipboard.writeText(path);
+    toast("已复制路径");
+  } catch (err) { toast("复制失败：" + String(err)); }
+}
+async function revealPath(path) { try { await api().Reveal(path); } catch (err) { toast(String(err)); } }
+function contextItems({ node, from }) {
+  const busy = scanning || trashing, items = [];
+  if (node.kind === "file") {
+    items.push(graph.collected.has(node.path)
+      ? { label: "移出待删除", run: () => graph.removeCollected(node.path), disabled: trashing }
+      : { label: "加入待删除", run: () => graph.collect(node), disabled: busy });
+  } else if (node.kind === "group") {
+    const files = graph.groupFiles(node).filter((f) => !graph.collected.has(f.path));
+    items.push({ label: files.length ? `将其中 ${files.length} 个新文件加入待删除` : "其中的文件均已在待删除中", run: () => graph.collectMany(files), disabled: busy || !files.length });
+  } else if (node.kind === "dir") {
+    if (from === "list") items.push({ label: "在图形中查看", run: () => { setResultView("graph"); graph.showDirectory(node.path); }, disabled: scanning });
+    else if (graph.mode === "dirs") items.push({ label: "进入目录", run: () => graph.activate(node), disabled: scanning });
+    items.push({ label: "加入待删除", hint: "目录不能删除，只能删除其中的文件", disabled: true });
+  }
+  if (node.path) {
+    items.push({ separator: true });
+    items.push({ label: "在文件管理器中显示", run: () => revealPath(node.path) });
+    items.push({ label: "复制路径", run: () => copyPath(node.path) });
+  }
+  return items;
+}
+const contextMenu = {
+  el: $("contextMenu"), items: [], restore: null,
+  open(target, x, y) {
+    const items = contextItems(target);
+    graph.cancelHover();
+    this.items = items; this.restore = document.activeElement;
+    this.el.innerHTML = `<div class="contextTitle" title="${esc(target.node.path || target.node.name)}">${esc(target.node.name)}</div>` +
+      items.map((item, i) => item.separator ? '<hr>' : `<button role="menuitem" data-i="${i}" ${item.disabled ? 'disabled' : ''} ${item.hint ? `title="${esc(item.hint)}"` : ''}>${esc(item.label)}${item.hint ? `<small>${esc(item.hint)}</small>` : ''}</button>`).join("");
+    this.el.hidden = false;
+    const w = this.el.offsetWidth, h = this.el.offsetHeight;
+    this.el.style.left = Math.max(4, Math.min(x, innerWidth - w - 4)) + "px";
+    this.el.style.top = Math.max(4, Math.min(y, innerHeight - h - 4)) + "px";
+    const first = this.el.querySelector("button:not(:disabled)");
+    if (first) first.focus(); else this.el.focus();
+  },
+  close(restoreFocus) {
+    if (this.el.hidden) return;
+    this.el.hidden = true; this.items = [];
+    if (restoreFocus && this.restore && this.restore.focus) this.restore.focus();
+    this.restore = null;
+  },
+};
+document.addEventListener("contextmenu", (e) => {
+  const target = contextNode(e.target);
+  if (!target) { contextMenu.close(); return; }
+  e.preventDefault();
+  // 键盘触发（Shift+F10 / 菜单键）时没有指针坐标，定位到元素旁边。
+  let x = e.clientX, y = e.clientY;
+  if (!x && !y) { const box = e.target.getBoundingClientRect(); x = box.left + 12; y = box.bottom; }
+  contextMenu.open(target, x, y);
+});
+contextMenu.el.addEventListener("click", (e) => {
+  const button = e.target.closest("button[data-i]");
+  if (!button || button.disabled) return;
+  const item = contextMenu.items[+button.dataset.i];
+  contextMenu.close(true);
+  item.run();
+});
+contextMenu.el.addEventListener("keydown", (e) => {
+  const buttons = Array.from(contextMenu.el.querySelectorAll("button:not(:disabled)"));
+  const index = buttons.indexOf(document.activeElement);
+  if (e.key === "Escape") { e.preventDefault(); contextMenu.close(true); }
+  else if (e.key === "Tab") contextMenu.close(false);
+  else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key) && buttons.length) {
+    e.preventDefault();
+    const next = e.key === "Home" ? 0 : e.key === "End" ? buttons.length - 1 : (index + (e.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+    buttons[next].focus();
+  }
+});
+document.addEventListener("pointerdown", (e) => { if (!contextMenu.el.contains(e.target)) contextMenu.close(); }, true);
+window.addEventListener("blur", () => contextMenu.close());
+window.addEventListener("resize", () => contextMenu.close());
+document.addEventListener("scroll", (e) => { if (!contextMenu.el.contains(e.target)) contextMenu.close(); }, true);
 
 // ---------- init ----------
 window.addEventListener("DOMContentLoaded", async () => {

@@ -263,7 +263,7 @@ class DiskGraph {
     const y = Math.max(8, Math.min(bounds.height - this.tooltipSize.height - 30, point.y - bounds.top + 12));
     tip.style.transform = `translate3d(${x}px, ${y}px, 0)`;
   }
-  // 图形内的扇区、气泡、右侧列表和详情都可以映射回对应节点。
+  // 图形内的扇区、气泡、右侧列表和详情都可以映射回对应节点（拖动与右键菜单共用）。
   nodeFromElement(el) {
     if (!this.data || !el || !el.closest) return null;
     const item = el.closest("#sunburst [data-node]");
@@ -410,6 +410,10 @@ class DiskGraph {
     h.paths = h.paths.slice(0, h.index + 1).concat(path); ++h.index;
     this.refresh();
   }
+  showDirectory(path) {
+    if (this.mode !== "dirs") this.changeMode("dirs");
+    this.navigate(path);
+  }
   travel(step) {
     this.cancelHover();
     const h = this.history[this.mode], index = h.index + step;
@@ -526,16 +530,23 @@ class DiskGraph {
     $("graphDetail").innerHTML = `<div ${files ? `draggable="true" data-file="${esc(node.path)}"` : ''}><h3>${esc(node.name)}</h3><p class="detailPath">${esc(node.path)}</p><div class="detailSize">${graphSize(node.alloc)} <span>${percent}%</span></div>${differs(node.alloc, node.logical) && node.kind !== 'other' ? `<p>逻辑大小 ${graphSize(node.logical)}</p>` : ''}${files ? `<p>出现日期 ${date(node.appeared)}${node.appearedIsMtime ? '（修改时间）' : ''}<br>修改日期 ${date(node.modified)}</p>` : ''}</div>${this.selected === node && files ? `<div class="detailActions"><button data-reveal="${esc(node.path)}">定位</button><button data-collect="true" ${scanning || trashing ? 'disabled' : ''}>加入待删除</button><button class="trash" data-path="${esc(node.path)}">删除</button></div>` : `<p>${files ? '点击文件可定位、加入待删除，或拖到下方待删除区。' : node.kind === 'dir' ? '点击进入此目录，查看下一层。' : '小文件、目录元数据及超过显示数量的项目合并于此。'}</p>`}`;
     for (const button of $("graphDetail").querySelectorAll("button.trash")) button.disabled = scanning || trashing;
   }
-  collect(node) {
-    if (node.kind !== "file" || scanning || trashing) return;
-    this.collected.set(node.path, node); this.renderCollector(); toast("已加入待删除，文件尚未移动");
+  collect(node) { this.collectMany([node]); }
+  collectMany(nodes) {
+    if (scanning || trashing) return;
+    const files = nodes.filter((n) => n && n.kind === "file");
+    if (!files.length) return;
+    for (const node of files) this.collected.set(node.path, node);
+    this.renderCollector();
+    const what = files.length > 1 ? `已将 ${files.length} 个文件加入待删除` : "已加入待删除";
+    toast(document.body.dataset.view === "list" ? `${what}，可在图形视图底部移入回收站` : `${what}，文件尚未移动`);
   }
+  groupFiles(group) { return this.data && this.data.files ? this.data.files.filter((f) => f.group === group) : []; }
   removeCollected(path) { this.collected.delete(path); this.renderCollector(); }
   renderCollector() {
     const nodes = Array.from(this.collected.values()), total = nodes.reduce((sum, n) => sum + n.alloc, 0);
     $("collectorCount").textContent = nodes.length ? `${nodes.length} 个待删除文件 · ${graphSize(total)}` : "待删除文件";
     $("collectorHint").textContent = nodes.length ? "点击移入回收站后才会移动文件，可在系统回收站恢复" : "将文件拖到这里，或在详情中加入待删除";
-    $("collectorItems").innerHTML = nodes.map((n) => `<span title="${esc(n.path)}">${esc(n.name)}<button data-remove="${esc(n.path)}" aria-label="移除待选 ${esc(n.name)}" ${trashing ? 'disabled' : ''}>×</button></span>`).join("");
+    $("collectorItems").innerHTML = nodes.map((n) => `<span title="${esc(n.path)}" data-path="${esc(n.path)}">${esc(n.name)}<button data-remove="${esc(n.path)}" aria-label="移除待选 ${esc(n.name)}" ${trashing ? 'disabled' : ''}>×</button></span>`).join("");
     this.syncControls();
   }
   syncControls() {
