@@ -5,6 +5,8 @@ const api = () => window.go.main.App;
 let roots = [];
 let scanning = false;
 let hasResult = false;
+let trashing = false;
+let fileQueryID = 0;
 
 // ---------- formatting ----------
 function gb(b) { return (b / 1e9).toFixed(1) + " GB"; }
@@ -76,6 +78,11 @@ function setScanning(on) {
   $("scanBtn").hidden = on; $("cancelBtn").hidden = !on;
   for (const id of ["addBtn", "browseBtn", "rootInput"]) $(id).disabled = on;
   $("status").classList.toggle("running", on);
+  updateTrashButtons();
+}
+function updateTrashButtons() {
+  for (const button of document.querySelectorAll("button.trash")) button.disabled = scanning || trashing;
+  $("scanBtn").disabled = trashing;
 }
 $("scanBtn").onclick = async () => {
   if (!roots.length) { toast("请先添加要扫描的目录"); return; }
@@ -98,6 +105,7 @@ function onDone(s) {
   const head = s.canceled ? "扫描已取消（结果不完整）" : "扫描完成";
   $("status").textContent = `${head}：共走过 ${s.walked.toLocaleString()} 个文件，失败 ${s.failed.toLocaleString()} 个，用时 ${s.seconds.toFixed(1)} 秒。`;
   $("status").title = "";
+  $("scanHint").hidden = true;
   const fs = $("failSec");
   fs.hidden = s.failed === 0;
   if (s.failed) {
@@ -124,14 +132,46 @@ async function queryDirs() {
 }
 async function queryFiles() {
   if (!hasResult) return;
+  const queryID = ++fileQueryID;
   const floorMB = 1;
   const mb = Math.max(floorMB, num("fileMin", 500));
   const res = await api().QueryFiles(Math.round(mb * 1e6), Math.round(num("fileDays", 60)));
+  // 删除或修改筛选条件后，忽略旧请求，避免已删除的文件重新出现在列表。
+  if (queryID !== fileQueryID) return;
   $("fileCount").textContent = countText(res.total, res.rows.length);
   $("fileBody").innerHTML = res.rows.length
     ? res.rows.map((r) => `<tr>${sizeCell(r)}<td class="date">${date(r.appeared)}${r.appearedIsMtime
-        ? `<span class="badge" title="该文件系统未提供创建时间，出现日期使用修改时间">修改时间</span>` : ""}</td><td class="date">${date(r.modified)}</td>${pathCell(r.path)}</tr>`).join("")
-    : `<tr><td colspan="4" class="empty">没有符合条件的文件</td></tr>`;
+        ? `<span class="badge" title="该文件系统未提供创建时间，出现日期使用修改时间">修改时间</span>` : ""}</td><td class="date">${date(r.modified)}</td>${pathCell(r.path)}<td class="action"><button class="trash" data-path="${esc(r.path)}" title="移入系统回收站，可在回收站恢复" aria-label="删除 ${esc(r.path)}">删除</button></td></tr>`).join("")
+    : `<tr><td colspan="5" class="empty">没有符合条件的文件</td></tr>`;
+  updateTrashButtons();
+}
+
+async function trashFile(button) {
+  if (scanning || trashing || button.disabled) return;
+  trashing = true;
+  ++fileQueryID;
+  updateTrashButtons();
+  button.textContent = "删除中…";
+  try {
+    await api().TrashFile(button.dataset.path);
+  } catch (err) {
+    toast(String(err));
+    button.textContent = "删除";
+    trashing = false;
+    updateTrashButtons();
+    return;
+  }
+  button.closest("tr").remove();
+  $("scanHint").hidden = false;
+  toast("已移入回收站，可在系统回收站恢复");
+  try {
+    await Promise.all([queryFiles(), refreshVolumes()]);
+  } catch (err) {
+    toast("文件已移入回收站，刷新失败，请重新扫描：" + String(err));
+  } finally {
+    trashing = false;
+    updateTrashButtons();
+  }
 }
 function debounce(fn, ms) { let t; return () => { clearTimeout(t); t = setTimeout(fn, ms); }; }
 $("dirMin").addEventListener("input", debounce(queryDirs, 200));
@@ -139,6 +179,8 @@ $("fileMin").addEventListener("input", debounce(queryFiles, 200));
 $("fileDays").addEventListener("input", debounce(queryFiles, 200));
 
 document.addEventListener("click", async (e) => {
+  const button = e.target.closest("button.trash");
+  if (button) { await trashFile(button); return; }
   const a = e.target.closest("a.path");
   if (!a) return;
   e.preventDefault();

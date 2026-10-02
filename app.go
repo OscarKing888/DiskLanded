@@ -9,6 +9,7 @@ import (
 
 	"disklanded/internal/reveal"
 	"disklanded/internal/scan"
+	"disklanded/internal/trash"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -191,4 +192,37 @@ func (a *App) Reveal(path string) error {
 		return errors.New("该路径不在扫描结果中")
 	}
 	return reveal.Path(path)
+}
+
+// TrashFile only accepts files recorded by the completed scan.
+func (a *App) TrashFile(path string) error {
+	return a.trashFile(path, trash.Path)
+}
+
+func (a *App) trashFile(path string, move func(string) error) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cancel != nil {
+		return errors.New("扫描进行中，请等待扫描结束后再删除")
+	}
+	r := a.result
+	if r == nil {
+		return errors.New("没有扫描结果")
+	}
+	if isDir, ok := r.Contains(path); !ok || isDir {
+		return errors.New("只能删除扫描结果中的文件")
+	}
+	if err := move(path); err != nil {
+		return err
+	}
+	// 查询使用不可变快照：仅在系统回收成功后移除文件，失败时保留结果。
+	next := *r
+	next.Files = make([]scan.FileRec, 0, len(r.Files)-1)
+	for _, file := range r.Files {
+		if file.Path != path {
+			next.Files = append(next.Files, file)
+		}
+	}
+	a.result = &next
+	return nil
 }
