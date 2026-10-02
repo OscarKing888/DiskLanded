@@ -37,6 +37,19 @@ function graphSegments(root) {
   return segments;
 }
 
+function graphMarkup(segments) {
+  // 层级只在绘图时建立；悬停通过 <use> 引用分支，不逐一修改上千个扇区。
+  const parts = [];
+  let depth = 0;
+  segments.forEach((s, i) => {
+    while (depth >= s.lineage.length) { parts.push("</g>"); --depth; }
+    parts.push(`<g id="graphBranch${i}"><path data-node="${i}" d="${s.d}" fill="${s.color}" tabindex="${s.node.kind === "other" ? -1 : 0}" role="button" aria-label="${esc(s.node.name)} ${graphSize(s.node.alloc)}${s.node.kind === "dir" ? '，点击进入目录' : ''}"/>`);
+    ++depth;
+  });
+  while (depth-- > 0) parts.push("</g>");
+  return `<g id="graphSectors">${parts.join("")}</g><g id="graphHover" aria-hidden="true" display="none"><use id="graphHoverBranch"/><path id="graphHoverOutline"/></g>`;
+}
+
 class DiskGraph {
   constructor() {
     this.mode = "dirs";
@@ -46,6 +59,9 @@ class DiskGraph {
     this.selected = null;
     this.segments = [];
     this.collected = new Map();
+    this.hoverFrame = 0;
+    this.tooltipNode = null;
+    this.tooltipBounds = null;
     this.bind();
     this.renderCollector();
   }
@@ -58,21 +74,17 @@ class DiskGraph {
       const button = e.target.closest("button[data-path]");
       if (button) this.navigate(button.dataset.path);
     };
-    $("sunburst").addEventListener("pointerover", (e) => {
+    const hoverSector = (e) => {
       const path = e.target.closest("path[data-node]");
-      if (path) this.highlight(this.segments[+path.dataset.node].node);
-    });
-    $("sunburst").addEventListener("pointermove", (e) => {
-      const path = e.target.closest("path[data-node]");
-      if (!path) { $("graphTooltip").hidden = true; return; }
-      const n = this.segments[+path.dataset.node].node;
-      const tip = $("graphTooltip"), bounds = $("sunburst").parentElement.getBoundingClientRect();
-      tip.textContent = `${n.name} · ${graphSize(n.alloc)}`;
-      tip.hidden = false;
-      tip.style.left = Math.max(8, Math.min(bounds.width - tip.offsetWidth - 8, e.clientX - bounds.left + 12)) + "px";
-      tip.style.top = Math.max(8, Math.min(bounds.height - tip.offsetHeight - 30, e.clientY - bounds.top + 12)) + "px";
-    });
-    $("sunburst").addEventListener("pointerleave", () => { this.highlight(this.selected); $("graphTooltip").hidden = true; });
+      this.queueHover(path ? this.segments[+path.dataset.node].node : this.selected,
+        path ? { x: e.clientX, y: e.clientY } : null);
+    };
+    $("sunburst").addEventListener("pointerover", hoverSector);
+    $("sunburst").addEventListener("pointermove", hoverSector);
+    $("sunburst").addEventListener("pointerleave", () => this.queueHover(this.selected));
+    const invalidateBounds = () => { this.tooltipBounds = null; };
+    window.addEventListener("resize", invalidateBounds);
+    window.addEventListener("scroll", invalidateBounds, true);
     const activate = (e) => {
       const path = e.target.closest("path[data-node]");
       if (path) this.activate(this.segments[+path.dataset.node].node);
@@ -85,9 +97,9 @@ class DiskGraph {
     };
     $("graphLegend").onpointerover = (e) => {
       const row = e.target.closest("[data-child]");
-      if (row) this.highlight(this.data.root.children[+row.dataset.child]);
+      if (row) this.queueHover(this.data.root.children[+row.dataset.child]);
     };
-    $("graphLegend").onpointerleave = () => this.highlight(this.selected);
+    $("graphLegend").onpointerleave = () => this.queueHover(this.selected);
     $("graphLegend").onclick = (e) => {
       const row = e.target.closest("[data-child]");
       if (row) this.activate(this.data.root.children[+row.dataset.child]);
@@ -108,6 +120,39 @@ class DiskGraph {
       if (button && !trashing) { this.collected.delete(button.dataset.remove); this.renderCollector(); }
     };
     $("collectorTrash").onclick = () => this.trashCollected();
+  }
+  queueHover(node, point = null) {
+    this.pendingHover = { node, point };
+    if (this.hoverFrame) return;
+    this.hoverFrame = requestAnimationFrame(() => {
+      this.hoverFrame = 0;
+      const pending = this.pendingHover;
+      this.pendingHover = null;
+      // 先读取容器位置，避免在高亮和详情写入后强制重新布局。
+      if (pending.point && !this.tooltipBounds) this.tooltipBounds = $("sunburst").parentElement.getBoundingClientRect();
+      this.highlight(pending.node);
+      this.moveTooltip(pending.node, pending.point);
+    });
+  }
+  cancelHover() {
+    if (this.hoverFrame) cancelAnimationFrame(this.hoverFrame);
+    this.hoverFrame = 0; this.pendingHover = null;
+    this.tooltipNode = null; this.tooltipBounds = null;
+    $("graphTooltip").hidden = true;
+  }
+  moveTooltip(node, point) {
+    const tip = $("graphTooltip");
+    if (!node || !point) { tip.hidden = true; this.tooltipNode = null; return; }
+    if (this.tooltipNode !== node || !this.tooltipSize) {
+      tip.textContent = `${node.name} · ${graphSize(node.alloc)}`;
+      tip.hidden = false;
+      this.tooltipSize = { width: tip.offsetWidth, height: tip.offsetHeight };
+      this.tooltipNode = node;
+    }
+    const bounds = this.tooltipBounds;
+    const x = Math.max(8, Math.min(bounds.width - this.tooltipSize.width - 8, point.x - bounds.left + 12));
+    const y = Math.max(8, Math.min(bounds.height - this.tooltipSize.height - 30, point.y - bounds.top + 12));
+    tip.style.transform = `translate3d(${x}px, ${y}px, 0)`;
   }
   bindFileDrag() {
     // 使用指针捕获，兼容 macOS WKWebView 和 Windows WebView2 的拖动行为。
@@ -158,6 +203,7 @@ class DiskGraph {
     this.refresh(this.history[mode].paths.length === 1);
   }
   reset() {
+    this.cancelHover(); this.detailState = null;
     ++this.request; this.data = null; this.selected = null;
     this.history = { dirs: { paths: [""], index: 0 }, files: { paths: [""], index: 0 } };
     this.collected.clear(); this.renderCollector();
@@ -198,12 +244,14 @@ class DiskGraph {
     } finally { if (token === this.request) $("graphView").setAttribute("aria-busy", "false"); }
   }
   navigate(path) {
+    this.cancelHover();
     const h = this.history[this.mode];
     if (h.paths[h.index] === path) return;
     h.paths = h.paths.slice(0, h.index + 1).concat(path); ++h.index;
     this.refresh();
   }
   travel(step) {
+    this.cancelHover();
     const h = this.history[this.mode], index = h.index + step;
     if (index < 0 || index >= h.paths.length) return;
     h.index = index; this.refresh();
@@ -213,40 +261,58 @@ class DiskGraph {
   }
   activate(node) {
     if (scanning) return;
+    this.cancelHover();
     if (node.kind === "dir") this.navigate(node.path);
     else if (node.kind === "file") { this.selected = node; this.highlight(node); }
     else this.showDetail(node);
   }
   render() {
     const root = this.data.root;
-    $("graphTooltip").hidden = true;
+    this.cancelHover(); this.detailState = null; this.highlighted = null; this.highlightedRow = null;
     this.segments = graphSegments(root);
+    this.sectorByNode = new Map(this.segments.map((s, i) => [s.node, { ...s, index: i }]));
     $("graphEmpty").hidden = root.alloc > 0;
     if (root.alloc <= 0) this.empty(this.mode === "files" ? "没有符合条件的新文件" : "这个目录暂无占用数据", "可以调整筛选条件或重新扫描");
     const label = graphSize(root.alloc).split(" ");
-    $("sunburst").innerHTML = this.segments.map((s, i) => `<path data-node="${i}" d="${s.d}" fill="${s.color}" tabindex="${s.node.kind === "other" ? -1 : 0}" role="button" aria-label="${esc(s.node.name)} ${graphSize(s.node.alloc)}${s.node.kind === "dir" ? '，点击进入目录' : ''}"><title>${esc(s.node.name)} · ${graphSize(s.node.alloc)}</title></path>`).join("") +
+    $("sunburst").innerHTML = graphMarkup(this.segments) +
       `<g class="graphCenter" tabindex="0" role="button" aria-label="返回上层目录"><circle cx="320" cy="320" r="76"/><text x="320" y="310" class="centerValue">${label[0]}</text><text x="320" y="343" class="centerUnit">${label[1]}</text><text x="320" y="369" class="centerBack">${this.data.breadcrumbs.length > 1 ? '↑ 返回上层' : '扫描目录'}</text></g>`;
+    this.hoverElements = { base: $("graphSectors"), layer: $("graphHover"), branch: $("graphHoverBranch"), outline: $("graphHoverOutline") };
     $("graphTitle").textContent = root.name;
     $("graphTotal").textContent = graphSize(root.alloc);
     $("graphPath").textContent = root.path || "全部扫描目录";
     $("graphBreadcrumbs").innerHTML = this.data.breadcrumbs.map((n) => `<button data-path="${esc(n.path)}" title="${esc(n.path || n.name)}">${esc(n.name)}</button>`).join('<span aria-hidden="true">›</span>');
     $("graphLegend").innerHTML = root.children.map((n, i) => {
-      const sector = this.segments.find((s) => s.node === n);
+      const sector = this.sectorByNode.get(n);
       return `<div class="legendRow ${n.kind === "other" ? 'other' : ''}" data-child="${i}" tabindex="0" role="button" aria-label="${esc(n.name)} ${graphSize(n.alloc)}" ${n.kind === "file" ? `draggable="true" data-file="${esc(n.path)}"` : ''} title="${esc(n.path || '小文件、目录元数据与合并显示的项目')}"><i style="background:${sector ? sector.color : '#626873'}"></i><span>${esc(n.name)}${n.kind === "dir" ? ' <b>›</b>' : ''}</span><strong>${graphSize(n.alloc)}</strong></div>`;
     }).join("");
+    this.legendByNode = new Map(Array.from($("graphLegend").children, (row, i) => [root.children[i], row]));
     this.showDetail(null); this.syncControls();
   }
   highlight(node) {
-    const active = node && node.kind !== "other" ? node.path : null;
-    for (const path of $("sunburst").querySelectorAll("path[data-node]")) {
-      const segment = this.segments[+path.dataset.node];
-      path.classList.toggle("dim", !!active && !segment.lineage.includes(active));
-      path.classList.toggle("highlight", !!active && segment.node.path === active);
+    if (!this.hoverElements || !this.data) return;
+    if (this.highlighted !== node) {
+      const active = node && node.kind !== "other" ? this.sectorByNode.get(node) : null;
+      const { base, layer, branch, outline } = this.hoverElements;
+      if (active) {
+        base.setAttribute("opacity", ".22");
+        branch.setAttribute("href", `#graphBranch${active.index}`);
+        outline.setAttribute("d", active.d);
+        layer.removeAttribute("display");
+      } else {
+        base.removeAttribute("opacity"); layer.setAttribute("display", "none");
+      }
+      if (this.highlightedRow) this.highlightedRow.classList.remove("highlight");
+      this.highlightedRow = active ? this.legendByNode.get(node) : null;
+      if (this.highlightedRow) this.highlightedRow.classList.add("highlight");
+      this.highlighted = node;
     }
-    for (const row of $("graphLegend").querySelectorAll("[data-child]")) row.classList.toggle("highlight", !!active && this.data.root.children[+row.dataset.child].path === active);
     this.showDetail(node || this.selected);
   }
   showDetail(node) {
+    const pinned = this.selected === node;
+    const previous = this.detailState;
+    if (previous && previous.node === node && previous.pinned === pinned && previous.root === this.data?.root && previous.mode === this.mode) return;
+    this.detailState = { node, pinned, root: this.data?.root, mode: this.mode };
     if (!node) {
       $("graphDetail").innerHTML = `<p>${this.mode === "files" ? '仅显示符合大小和出现日期筛选的文件。' : '扇区宽度表示占用大小，从内到外表示目录层级。'}</p><p>灰色为文件或合并的较小项目。点击文件查看日期、定位或加入待删除。</p>`;
       return;
@@ -296,4 +362,4 @@ class DiskGraph {
   }
 }
 
-if (typeof module !== "undefined" && module.exports) module.exports = { graphSize, sectorPath, graphSegments };
+if (typeof module !== "undefined" && module.exports) module.exports = { graphSize, sectorPath, graphSegments, graphMarkup, DiskGraph };

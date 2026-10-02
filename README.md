@@ -143,3 +143,10 @@ DISKLANDED_GUI=1 go test -v ./internal/reveal                    # 在 Finder / 
 ```
 
 权限测试在 Unix 上需要以非 root 用户运行。`.github/workflows/build.yml` 在推送版本 Tag 时于三种系统上执行以上测试、构建并启动应用。
+
+图形悬停性能可使用 `frontend/graph-benchmark.html` 检查：在仓库根目录运行
+`python3 -m http.server 8764 --bind 127.0.0.1`，浏览器打开
+`http://127.0.0.1:8764/frontend/graph-benchmark.html`，点击「运行 240 帧测试」。
+页面使用真实图形组件与 1,194 个模拟扇区，输出帧间隔、事件处理耗时和 DOM 修改次数；
+不扫描或修改真实文件。比较版本时使用相同浏览器和窗口大小，并保持页面在前台。
+悬停按显示帧合并更新，高亮通过分支引用绘制；同一扇区内移动不会重建详情或反复测量提示框。

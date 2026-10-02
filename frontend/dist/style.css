@@ -119,9 +119,9 @@ body[data-view=graph] .resultTabs { margin-top: 8px; }
 body[data-view=graph] .resultTabs button { padding: 6px 20px; }
 #volumeSummary { margin-left: 14px; color: var(--muted); font-size: 12px; font-weight: 400; }
 .volumeSection[open] .volumes { margin-top: 8px; }
-#sunburst path { stroke: var(--graph-bg); stroke-width: .8; cursor: pointer; transition: opacity .16s, filter .16s; }
-#sunburst path.dim { opacity: .22; }
-#sunburst path.highlight { filter: brightness(1.2); stroke: #fff; stroke-width: 1.6; }
+#sunburst path { stroke: var(--graph-bg); stroke-width: .8; cursor: pointer; }
+#graphHover, #graphHover * { pointer-events: none; }
+#sunburst #graphHoverOutline { fill: none; stroke: #fff; stroke-width: 1.6; }
 .graphCenter { cursor: pointer; }
 .graphCenter circle { fill: var(--graph-bg); }
 .graphCenter:hover circle { fill: #303640; }
@@ -133,7 +133,7 @@ body[data-view=graph] .resultTabs button { padding: 6px 20px; }
 .graphEmpty { position: absolute; inset: 20% 0 25%; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; text-align: center; background: radial-gradient(circle, #313946 0, #262a31 62%); }
 .graphEmpty strong { font-size: 22px; font-weight: 500; }
 .graphEmpty span { font-size: 13px; color: var(--graph-muted); max-width: 80%; word-break: break-word; }
-.graphTooltip { position: absolute; z-index: 3; pointer-events: none; background: #11161ef2; border: 1px solid #4b5565; border-radius: 6px; padding: 6px 10px; font-size: 12px; max-width: 280px; word-break: break-all; box-shadow: 0 4px 14px #0004; }
+.graphTooltip { position: absolute; left: 0; top: 0; z-index: 3; pointer-events: none; background: #11161ef2; border: 1px solid #4b5565; border-radius: 6px; padding: 6px 10px; font-size: 12px; max-width: 280px; word-break: break-all; box-shadow: 0 4px 14px #0004; will-change: transform; }
 .graphSidebar { padding-top: 14px; min-width: 0; max-height: max(280px, min(43vh, 460px)); overflow-y: auto; }
 .graphHeading { display: flex; align-items: baseline; gap: 10px; justify-content: space-between; }
 .graphHeading h2 { font-size: 19px; font-weight: 500; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -180,4 +180,3 @@ body[data-view=graph] .resultTabs button { padding: 6px 20px; }
   .graphSidebar { padding: 0 8px 12px; max-height: none; }
   #sunburst { height: 420px; }
 }
-@media (prefers-reduced-motion: reduce) { #sunburst path { transition: none; } }

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>DiskLanded 图形悬停性能检查</title>
+<style>
+body { margin: 0; background: #171b22; color: #e6eaf0; font: 14px system-ui; }
+header { padding: 10px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+button { padding: 6px 12px; cursor: pointer; }
+output { white-space: pre-wrap; font: 12px monospace; }
+iframe { width: 100%; height: calc(100vh - 100px); border: 0; }
+</style>
+<header><strong>1,194 扇区 · 悬停回归检查</strong><button id="run" disabled>运行 240 帧测试</button><output id="result">正在载入…</output></header>
+<iframe id="preview" title="真实图形组件，模拟扫描数据"></iframe>
+<script>
+// 仅在本地测试页使用模拟结果和空后端，不扫描或修改真实文件。
+const frame = document.getElementById('preview'), result = document.getElementById('result'), run = document.getElementById('run');
+const reportError = (error) => { result.textContent = '测试失败：' + String(error); run.disabled = false; };
+window.addEventListener('unhandledrejection', e => reportError(e.reason));
+const baseline = new URLSearchParams(location.search).has('baseline');
+const assets = new URL(baseline ? '../build/bin/hover-baseline/' : 'dist/', location.href);
+function fixture() {
+  const root = { name: '性能测试', path: '/fixture', kind: 'dir', alloc: 0, logical: 0, children: [] };
+  for (let i = 0; i < 6; i++) {
+    const branch = { name: '目录 ' + i, path: root.path + '/' + i, kind: 'dir', alloc: 0, logical: 0, children: [] };
+    for (let j = 0; j < 9; j++) {
+      const sub = { name: '子目录 ' + j, path: branch.path + '/' + j, kind: 'dir', alloc: 0, logical: 0, children: [] };
+      for (let k = 0; k < 21; k++) {
+        const alloc = (22 - k) * 1000000;
+        sub.children.push({ name: '测试文件 ' + k, path: sub.path + '/' + k, kind: 'file', alloc, logical: alloc, appeared: 1750000000, modified: 1750000000, children: [] });
+        sub.alloc += alloc;
+      }
+      sub.logical = sub.alloc; branch.children.push(sub); branch.alloc += sub.alloc;
+    }
+    branch.logical = branch.alloc; root.children.push(branch); root.alloc += branch.alloc;
+  }
+  root.logical = root.alloc;
+  return { root, breadcrumbs: [{ name: '性能测试', path: root.path }] };
+}
+frame.onload = () => {
+  const g = frame.contentWindow.benchmarkGraph;
+  if (!g) return;
+  frame.contentWindow.addEventListener('error', e => reportError(e.message));
+  g.data = fixture(); g.render();
+  result.textContent = (baseline ? '优化前' : '当前代码') + '：就绪，可手动悬停、选择文件或运行测试';
+  run.disabled = false;
+};
+fetch(new URL('index.html', assets)).then(r => r.text()).then(html => {
+  const stub = `window.runtime={EventsOn(){}};window.go={main:{App:{Version:async()=>"benchmark",Summary:async()=>({hasResult:false}),DefaultRoots:async()=>[],Volumes:async()=>({volumes:[],errors:[]})}}};`;
+  html = html.replace('<head>', '<head><base href="' + assets.href + '">');
+  html = html.replace('<script src="graph.js">', '<script>' + stub + '<\/script><script src="graph.js">');
+  html = html.replace('</body>', '<style>.top,.volumeSection,.resultTabs{display:none}#sunburst{height:65vh;max-height:620px}.graphSidebar{max-height:65vh}</style><script>window.benchmarkGraph=graph;<\/script></body>');
+  frame.srcdoc = html;
+}).catch(err => { result.textContent = String(err); });
+run.onclick = async () => {
+  run.disabled = true;
+  const win = frame.contentWindow, g = win.benchmarkGraph;
+  g.data = fixture(); g.selected = null; g.render();
+  const paths = Array.from(win.document.querySelectorAll('path[data-node]'));
+  const roots = paths.filter(p => g.segments[+p.dataset.node].lineage.length === 1);
+  let mutations = 0;
+  const observer = new win.MutationObserver(records => { mutations += records.length; });
+  observer.observe(win.document.getElementById('graphView'), { subtree: true, attributes: true, childList: true, characterData: true });
+  const nextFrame = () => new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => { win.cancelAnimationFrame(id); reject(new Error('动画帧暂停，请将测试页置于前台后重试')); }, 3000);
+    const id = win.requestAnimationFrame(time => { clearTimeout(timeout); resolve(time); });
+  });
+  const intervals = [], dispatch = [];
+  try {
+    let previous = await nextFrame();
+    for (let i = 0; i < 240; i++) {
+      const now = await nextFrame();
+      if (i) intervals.push(now - previous);
+      previous = now;
+      const path = i % 4 === 0 ? roots[(i / 4) % roots.length] : paths[(i * 37) % paths.length];
+      const start = performance.now();
+      path.dispatchEvent(new win.PointerEvent('pointerover', { bubbles: true, clientX: 300, clientY: 300 }));
+      for (let j = 0; j < 3; j++) path.dispatchEvent(new win.PointerEvent('pointermove', { bubbles: true, clientX: 300 + j * 4, clientY: 300 + j * 3 }));
+      dispatch.push(performance.now() - start);
+      if (i % 60 === 0) result.textContent = '运行中 ' + i + '/240';
+    }
+    await nextFrame(); await nextFrame();
+    const percentile = (values, p) => +values.slice().sort((a,b)=>a-b)[Math.floor((values.length-1)*p)].toFixed(2);
+    result.textContent = JSON.stringify({ version: baseline ? 'before' : 'after', sectors: paths.length, frameMedianMs: percentile(intervals,.5), frameP95Ms: percentile(intervals,.95), dispatchP95Ms: percentile(dispatch,.95), framesOver25ms: intervals.filter(v=>v>25).length, domMutations: mutations });
+  } catch (err) { reportError(err); }
+  finally {
+    observer.disconnect();
+    win.document.getElementById('sunburst').dispatchEvent(new win.PointerEvent('pointerleave'));
+    run.disabled = false;
+  }
+};
+</script>
+</html>
