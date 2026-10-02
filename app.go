@@ -29,9 +29,6 @@ type App struct {
 	cacheError  string
 	restored    bool
 	graphResult *scan.Result
-	graphMode   string
-	graphMin    int64
-	graphDays   int
 	graph       *scan.GraphIndex
 }
 
@@ -238,29 +235,16 @@ func (a *App) QueryFiles(minBytes int64, days int) FilesResp {
 	return FilesResp{rows, n}
 }
 
-// QueryGraph builds a cached, complete hierarchy and returns only the visible subtree.
-func (a *App) QueryGraph(path, mode string, minBytes int64, days int) (scan.GraphView, error) {
+// QueryGraph builds a cached, complete directory hierarchy and returns only the visible subtree.
+func (a *App) QueryGraph(path string) (scan.GraphView, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.result == nil {
 		return scan.GraphView{}, errors.New("请先扫描目录")
 	}
-	if mode != "dirs" && mode != "files" {
-		return scan.GraphView{}, errors.New("图形类型无效")
-	}
-	if minBytes < scan.FileFloor {
-		minBytes = scan.FileFloor
-	}
-	if days < 1 {
-		days = 60
-	}
-	if days > 36500 {
-		days = 36500
-	}
-	if a.graphResult != a.result || a.graphMode != mode || a.graphMin != minBytes || a.graphDays != days {
-		since := time.Now().Add(-time.Duration(days) * 24 * time.Hour).Unix()
-		a.graph = a.result.GraphIndex(mode == "files", minBytes, since)
-		a.graphResult, a.graphMode, a.graphMin, a.graphDays = a.result, mode, minBytes, days
+	if a.graphResult != a.result {
+		a.graph = a.result.GraphIndex()
+		a.graphResult = a.result
 	}
 	return a.graph.View(path)
 }

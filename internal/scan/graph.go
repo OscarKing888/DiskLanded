@@ -32,16 +32,13 @@ type GraphIndex struct {
 	parent   map[string]string
 }
 
-func (r *Result) GraphIndex(filesOnly bool, minAlloc, since int64) *GraphIndex {
+func (r *Result) GraphIndex() *GraphIndex {
 	g := &GraphIndex{nodes: map[string]GraphNode{}, children: map[string][]string{}, parent: map[string]string{}}
 	g.nodes[""] = GraphNode{Name: "扫描目录", Kind: "dir"}
 	for _, d := range r.Dirs {
-		n := GraphNode{Path: d.Path, Name: filepath.Base(d.Path), Kind: "dir"}
+		n := GraphNode{Path: d.Path, Name: filepath.Base(d.Path), Kind: "dir", Alloc: d.Alloc, Logical: d.Logical}
 		if n.Name == string(filepath.Separator) || n.Name == "." {
 			n.Name = d.Path
-		}
-		if !filesOnly {
-			n.Alloc, n.Logical = d.Alloc, d.Logical
 		}
 		g.nodes[d.Path] = n
 	}
@@ -61,9 +58,6 @@ func (r *Result) GraphIndex(filesOnly bool, minAlloc, since int64) *GraphIndex {
 		g.children[parent] = append(g.children[parent], path)
 	}
 	for _, f := range r.Files {
-		if filesOnly && (f.Alloc < minAlloc || f.Appeared < since) {
-			continue
-		}
 		parent := filepath.Dir(f.Path)
 		if _, ok := g.nodes[parent]; !ok {
 			continue
@@ -72,27 +66,14 @@ func (r *Result) GraphIndex(filesOnly bool, minAlloc, since int64) *GraphIndex {
 			Alloc: f.Alloc, Logical: f.Logical, Appeared: f.Appeared, Modified: f.Modified, AppearedIsMtime: f.AppearedIsMtime}
 		g.parent[f.Path] = parent
 		g.children[parent] = append(g.children[parent], f.Path)
-		if filesOnly {
-			for p := parent; ; p = g.parent[p] {
-				n := g.nodes[p]
-				n.Alloc += f.Alloc
-				n.Logical += f.Logical
-				g.nodes[p] = n
-				if p == "" {
-					break
-				}
-			}
-		}
 	}
-	if !filesOnly {
-		root := g.nodes[""]
-		for _, path := range g.children[""] {
-			n := g.nodes[path]
-			root.Alloc += n.Alloc
-			root.Logical += n.Logical
-		}
-		g.nodes[""] = root
+	root := g.nodes[""]
+	for _, path := range g.children[""] {
+		n := g.nodes[path]
+		root.Alloc += n.Alloc
+		root.Logical += n.Logical
 	}
+	g.nodes[""] = root
 	for parent, children := range g.children {
 		sort.Slice(children, func(i, j int) bool {
 			a, b := g.nodes[children[i]], g.nodes[children[j]]

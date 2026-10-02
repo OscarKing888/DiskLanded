@@ -38,15 +38,13 @@ func TestScanCacheRestoresSummaryAndQueries(t *testing.T) {
 		!reflect.DeepEqual(next.QueryFiles(1, 60), app.QueryFiles(1, 60)) {
 		t.Fatal("restored queries differ")
 	}
-	for _, mode := range []string{"dirs", "files"} {
-		wantGraph, err := app.QueryGraph(root, mode, 1_000_000, 60)
-		if err != nil {
-			t.Fatal(err)
-		}
-		gotGraph, err := next.QueryGraph(root, mode, 1_000_000, 60)
-		if err != nil || !reflect.DeepEqual(gotGraph, wantGraph) {
-			t.Fatalf("restored %s graph differs: %v", mode, err)
-		}
+	wantGraph, err := app.QueryGraph(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotGraph, err := next.QueryGraph(root)
+	if err != nil || !reflect.DeepEqual(gotGraph, wantGraph) {
+		t.Fatalf("restored graph differs: %v", err)
 	}
 	if err := next.trashFile(result.Files[0].Path, func(string) error { return nil }); err != nil {
 		t.Fatal(err)
@@ -56,7 +54,7 @@ func TestScanCacheRestoresSummaryAndQueries(t *testing.T) {
 	if reopened.QueryFiles(1, 60).Total != 0 || reopened.QueryDirs(1).Total != 1 {
 		t.Fatal("reopened cache did not preserve successful trash update")
 	}
-	if graph, err := reopened.QueryGraph(root, "files", 1_000_000, 60); err != nil || graph.Root.Alloc != 0 {
+	if graph, err := reopened.QueryGraph(root); err != nil || len(graph.Root.Children) != 1 || graph.Root.Children[0].Kind != "other" {
 		t.Fatalf("deleted file remained in reopened graph: %+v %v", graph, err)
 	}
 	result.Canceled = false

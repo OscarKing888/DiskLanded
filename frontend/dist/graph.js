@@ -344,11 +344,11 @@ class DiskGraph {
     if (!hasResult) return;
     const token = ++this.request, mode = this.mode, history = this.history[mode];
     let path = history.paths[history.index];
-    const minMB = Math.max(1, num("fileMin", 500)), days = Math.max(1, Math.min(36500, Math.round(num("fileDays", 60))));
-    const fetch = (p) => api().QueryGraph(p, mode, Math.round(minMB * 1e6), days);
+    const fetch = (p) => api().QueryGraph(p);
     $("graphView").setAttribute("aria-busy", "true");
     try {
       if (mode === "files") {
+        const minMB = Math.max(1, num("fileMin", 500)), days = Math.max(1, Math.min(36500, Math.round(num("fileDays", 60))));
         const res = await api().QueryFiles(Math.round(minMB * 1e6), days);
         if (token !== this.request) return;
         this.data = Object.assign(fileTimeline(res.rows, days), { total: res.total, minMB });

@@ -36,7 +36,7 @@ func assertGraphTotals(t *testing.T, n GraphNode) int {
 
 func TestGraphHierarchyDoesNotDoubleCount(t *testing.T) {
 	r := graphFixture(t)
-	g := r.GraphIndex(false, 0, 0)
+	g := r.GraphIndex()
 	view, err := g.View("")
 	if err != nil {
 		t.Fatal(err)
@@ -56,6 +56,9 @@ func TestGraphHierarchyDoesNotDoubleCount(t *testing.T) {
 	if view.Root.Alloc != 60 {
 		t.Fatal("subtree weight is incorrect")
 	}
+	if file := view.Root.Children[0]; file.Path != r.Files[0].Path || file.Kind != "file" || file.Appeared != 200 {
+		t.Fatalf("file metadata lost: %+v", file)
+	}
 	assertGraphTotals(t, view.Root)
 	for _, path := range []string{"unscanned", r.Files[0].Path} {
 		if _, err := g.View(path); err == nil {
@@ -64,37 +67,18 @@ func TestGraphHierarchyDoesNotDoubleCount(t *testing.T) {
 	}
 }
 
-func TestNewFilesGraphFiltersAndKeepsAncestors(t *testing.T) {
-	r := graphFixture(t)
-	view, err := r.GraphIndex(true, 30, 150).View("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if view.Root.Alloc != 40 {
-		t.Fatalf("new file total: %d", view.Root.Alloc)
-	}
-	file := view.Root.Children[0].Children[0].Children[0]
-	if file.Path != r.Files[0].Path || file.Kind != "file" || file.Appeared != 200 {
-		t.Fatalf("file metadata lost: %+v", file)
-	}
-	assertGraphTotals(t, view.Root)
-	empty, err := r.GraphIndex(true, 1000, 150).View(r.Roots[0])
-	if err != nil || empty.Root.Alloc != 0 || len(empty.Root.Children) != 0 {
-		t.Fatalf("empty filter result: %+v, %v", empty, err)
-	}
-}
-
 func TestGraphBeyondListLimitAndBoundedPayload(t *testing.T) {
 	r := graphFixture(t)
-	r.Files = nil
+	r.Dirs, r.Files = r.Dirs[:1], nil
 	for i := 0; i < 5000; i++ {
-		r.Files = append(r.Files, FileRec{Path: filepath.Join(r.Roots[0], fmt.Sprintf("file-%04d", i)), Alloc: 10, Appeared: 200})
+		r.Files = append(r.Files, FileRec{Path: filepath.Join(r.Roots[0], fmt.Sprintf("file-%04d", i)), Alloc: int64(i + 1), Appeared: 200})
+		r.Dirs[0].Alloc += int64(i + 1)
 	}
-	view, err := r.GraphIndex(true, 1, 0).View(r.Roots[0])
+	view, err := r.GraphIndex().View(r.Roots[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if view.Root.Alloc != 50000 {
+	if view.Root.Children[0].Path != r.Files[4999].Path {
 		t.Fatal("graph truncated to the list row limit")
 	}
 	if len(view.Root.Children) > 37 {
@@ -113,7 +97,7 @@ func TestGraphMultipleRoots(t *testing.T) {
 	other := filepath.Join(t.TempDir(), "other")
 	r.Roots = append(r.Roots, other)
 	r.Dirs = append(r.Dirs, DirRec{Path: other, Alloc: 50})
-	view, err := r.GraphIndex(false, 0, 0).View("")
+	view, err := r.GraphIndex().View("")
 	if err != nil || len(view.Root.Children) != 2 || view.Root.Alloc != 150 {
 		t.Fatalf("multiple roots: %+v %v", view.Root, err)
 	}
@@ -134,7 +118,7 @@ func TestGraphBudgetPreservesTopLevelBranches(t *testing.T) {
 			}
 		}
 	}
-	view, err := r.GraphIndex(false, 0, 0).View(root)
+	view, err := r.GraphIndex().View(root)
 	if err != nil {
 		t.Fatal(err)
 	}
