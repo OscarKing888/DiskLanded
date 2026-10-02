@@ -54,8 +54,12 @@ function bump(root, version, ...options) {
 function success(result) { assert.equal(result.status, 0, result.stderr || result.stdout); }
 function snapshot(root) { return ['VERSION', 'CHANGELOG.md'].map(file => fs.readFileSync(path.join(root, file), 'utf8')); }
 
-test('default bump isolates work, merges main, tags, preserves staged work and cleans resources', t => {
+test('default bump commits directly on main, tags and preserves unrelated staged work', t => {
   const root = fixture(t);
+  const hooks = path.join(root, '.git', 'version-test-hooks');
+  fs.mkdirSync(hooks);
+  fs.writeFileSync(path.join(hooks, 'pre-commit'), '#!/bin/sh\ngit branch --show-current > "$(git rev-parse --git-common-dir)/bump-branch-observed"\ngit worktree list --porcelain > "$(git rev-parse --git-common-dir)/bump-worktrees-observed"\n', { mode: 0o755 });
+  git(root, 'config', 'core.hooksPath', hooks);
   fs.writeFileSync(path.join(root, 'unrelated.txt'), 'staged work\n');
   git(root, 'add', 'unrelated.txt');
   const staged = git(root, 'diff', '--cached', '--binary');
@@ -68,6 +72,8 @@ test('default bump isolates work, merges main, tags, preserves staged work and c
   assert.equal(git(root, 'rev-parse', 'v0.1.1^{commit}'), git(root, 'rev-parse', 'main'));
   assert.equal(git(root, 'show', 'HEAD:unrelated.txt'), 'original');
   assert.equal(git(root, 'diff', '--cached', '--binary'), staged);
+  assert.equal(fs.readFileSync(path.join(root, '.git/bump-branch-observed'), 'utf8').trim(), 'main');
+  assert.equal(fs.readFileSync(path.join(root, '.git/bump-worktrees-observed'), 'utf8').split('\n').filter(line => line.startsWith('worktree ')).length, 1);
   assert.equal(git(root, 'branch', '--list', 'session/*'), '');
   assert.equal(git(root, 'worktree', 'list', '--porcelain').split('\n').filter(line => line.startsWith('worktree ')).length, 1);
   assert.equal(fs.existsSync(path.join(root, '.git/disklanded-main-merge.lock')), false);
@@ -91,7 +97,7 @@ test('--no-tag commits; retry adds the missing tag without another commit', t =>
   assert.equal(git(root, 'rev-parse', 'v0.2^{commit}'), head);
 });
 
-test('--no-commit only updates files, including a source archive', t => {
+test('--no-commit only updates main files and rejects source archives without Git', t => {
   const root = fixture(t), head = git(root, 'rev-parse', 'HEAD');
   success(bump(root, '0.1.1', '--no-commit'));
   assert.equal(fs.readFileSync(path.join(root, 'VERSION'), 'utf8'), '0.1.1\n');
@@ -100,8 +106,51 @@ test('--no-commit only updates files, including a source archive', t => {
   const archive = fixture(t, false), before = snapshot(archive);
   assert.equal(bump(archive, '0.2').status, 1);
   assert.deepEqual(snapshot(archive), before);
-  success(bump(archive, '0.2', '--no-commit'));
-  assert.equal(fs.readFileSync(path.join(archive, 'VERSION'), 'utf8'), '0.2\n');
+  assert.equal(bump(archive, '0.2', '--no-commit').status, 1);
+  assert.deepEqual(snapshot(archive), before);
+});
+
+test('calls from another worktree target main without changing the caller branch or files', t => {
+  const root = fixture(t);
+  const caller = path.join(root, '.worktrees', 'caller 中文');
+  git(root, 'worktree', 'add', '-b', 'feature/caller', caller, 'main');
+  fs.writeFileSync(path.join(caller, 'VERSION'), '9.9.9\n');
+  fs.writeFileSync(path.join(caller, 'unrelated.txt'), 'caller staged work\n');
+  git(caller, 'add', 'unrelated.txt');
+  const before = snapshot(caller), staged = git(caller, 'diff', '--cached', '--binary');
+  const head = git(caller, 'rev-parse', 'HEAD');
+  success(bump(caller, '0.1.1', '--notes', 'Only main changes.'));
+  assert.equal(fs.readFileSync(path.join(root, 'VERSION'), 'utf8'), '0.1.1\n');
+  assert.equal(git(root, 'rev-parse', 'main'), git(root, 'rev-parse', 'v0.1.1^{commit}'));
+  assert.equal(git(caller, 'branch', '--show-current'), 'feature/caller');
+  assert.equal(git(caller, 'rev-parse', 'HEAD'), head);
+  assert.deepEqual(snapshot(caller), before);
+  assert.equal(git(caller, 'diff', '--cached', '--binary'), staged);
+  assert.equal(git(root, 'branch', '--list', 'session/*'), '');
+  assert.equal(git(root, 'worktree', 'list', '--porcelain').split('\n').filter(line => line.startsWith('worktree ')).length, 2);
+
+  const mainHead = git(root, 'rev-parse', 'main');
+  success(bump(caller, '0.2', '--no-commit'));
+  assert.equal(fs.readFileSync(path.join(root, 'VERSION'), 'utf8'), '0.2\n');
+  assert.equal(git(root, 'rev-parse', 'main'), mainHead);
+  assert.deepEqual(snapshot(caller), before);
+  assert.equal(git(caller, 'diff', '--cached', '--binary'), staged);
+  assert.equal(git(root, 'tag', '--list', 'v0.2'), '');
+});
+
+test('a missing main checkout stops all modes without switching branches or changing files', t => {
+  const root = fixture(t), before = snapshot(root);
+  git(root, 'switch', '-c', 'feature/caller');
+  const head = git(root, 'rev-parse', 'main');
+  for (const options of [[], ['--no-commit'], ['--no-tag']]) {
+    const result = bump(root, '0.1.1', ...options);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Check out main/);
+    assert.deepEqual(snapshot(root), before);
+    assert.equal(git(root, 'branch', '--show-current'), 'feature/caller');
+    assert.equal(git(root, 'rev-parse', 'main'), head);
+    assert.equal(git(root, 'tag', '--list'), '');
+  }
 });
 
 test('dirty version files and invalid requests are rejected before writes', t => {
@@ -131,20 +180,24 @@ test('existing tags are never overwritten, including with --no-tag', t => {
   }
 });
 
-test('a commit failure preserves the isolated changes without modifying main', t => {
-  const root = fixture(t), before = snapshot(root), head = git(root, 'rev-parse', 'HEAD');
+test('a commit failure keeps the version edits on main without creating a branch or tag', t => {
+  const root = fixture(t), head = git(root, 'rev-parse', 'HEAD');
+  fs.writeFileSync(path.join(root, 'unrelated.txt'), 'staged work\n');
+  git(root, 'add', 'unrelated.txt');
+  const staged = git(root, 'diff', '--cached', '--binary');
   git(root, 'config', 'user.name', '');
   const result = bump(root, '0.1.1');
   assert.equal(result.status, 1);
   assert.match(result.stderr, /commit failed/);
-  assert.deepEqual(snapshot(root), before);
+  assert.equal(fs.readFileSync(path.join(root, 'VERSION'), 'utf8'), '0.1.1\n');
   assert.equal(git(root, 'rev-parse', 'HEAD'), head);
   assert.equal(git(root, 'tag', '--list'), '');
-  const worktree = git(root, 'worktree', 'list', '--porcelain').split('\n').filter(line => line.startsWith('worktree '))[1].slice(9);
-  assert.equal(fs.readFileSync(path.join(worktree, 'VERSION'), 'utf8'), '0.1.1\n');
+  assert.equal(git(root, 'diff', '--cached', '--binary'), staged);
+  assert.equal(git(root, 'branch', '--list', 'session/*'), '');
+  assert.equal(git(root, 'worktree', 'list', '--porcelain').split('\n').filter(line => line.startsWith('worktree ')).length, 1);
 });
 
-test('tag signing failure keeps the merged commit and allows a safe retry', t => {
+test('tag signing failure keeps the main commit and allows a safe retry', t => {
   const root = fixture(t);
   git(root, 'config', 'tag.gpgsign', 'true');
   git(root, 'config', 'gpg.program', path.join(root, 'missing-gpg'));

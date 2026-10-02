@@ -3,7 +3,6 @@
 // CodeSearch's MIT copyright and permission notice: CODESEARCH-LICENSE.txt.
 const fs = require('node:fs');
 const path = require('node:path');
-const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { validateVersion, readVersion } = require('./version');
 
@@ -82,10 +81,28 @@ function withLock(common, branch, action) {
   }
 }
 
-function tagVersion(version, commit) {
+function mainWorktree() {
+  const normalize = value => process.platform === 'win32' ? value.toLowerCase() : value;
+  try {
+    if (normalize(fs.realpathSync(git(['rev-parse', '--show-toplevel']))) !== normalize(fs.realpathSync(ROOT))) {
+      throw new Error('The script must belong to this repository.');
+    }
+    // 使用 NUL 分隔，正确处理 Windows 路径、空格、中文及 Git 的路径转义。
+    const records = git(['worktree', 'list', '--porcelain', '-z']).split('\0\0');
+    const record = records.map(value => value.split('\0')).find(fields => fields.includes('branch refs/heads/main'));
+    if (!record) throw new Error('Check out main in a worktree before running bump-version.');
+    const root = fs.realpathSync(record.find(field => field.startsWith('worktree ')).slice(9));
+    if (git(['branch', '--show-current'], root) !== 'main') throw new Error('The main worktree changed branches; retry.');
+    return root;
+  } catch (error) {
+    throw new Error(`Version preparation requires a Git worktree checked out on main: ${error.message}\nNo version files were changed.`);
+  }
+}
+
+function tagVersion(version, commit, root) {
   const tag = `v${version}`;
   try {
-    git(['tag', '-a', tag, commit, '-m', `Release ${version}`]);
+    git(['tag', '-a', tag, commit, '-m', `Release ${version}`], root);
     console.log(`Created annotated tag ${tag} at ${commit}.`);
   } catch (error) {
     throw new Error(`Version commit ${commit} was kept, but creating tag ${tag} failed: ${error.message}\nFix Git signing/identity and rerun the same version. Existing tags are never overwritten.`);
@@ -94,97 +111,56 @@ function tagVersion(version, commit) {
 
 function main(argv) {
   const options = parseArgs(argv);
-  const previous = readVersion(ROOT);
-  // Parse every input before modifying files, including source-archive mode.
-  fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
-  if (!options.commit) {
-    updateFiles(ROOT, options);
-    console.log(`Updated VERSION ${previous} -> ${options.version} and CHANGELOG.md; skipped commit and tag (--no-commit).`);
-    return;
-  }
-
-  const normalize = value => process.platform === 'win32' ? value.toLowerCase() : value;
-  if (normalize(fs.realpathSync(git(['rev-parse', '--show-toplevel']))) !== normalize(fs.realpathSync(ROOT))) {
-    throw new Error('Run the script from the DiskLanded repository, or use --no-commit for a source archive.');
-  }
-  if (git(['branch', '--show-current']) !== 'main') {
-    throw new Error('Automatic release preparation starts from main. In an existing task worktree, use --no-commit, then follow the repository merge/tag protocol.');
-  }
-  git(['ls-files', '--error-unmatch', '--', ...VERSION_FILES]);
-  if (git(['status', '--porcelain', '--untracked-files=all', '--', ...VERSION_FILES])) {
-    throw new Error('Version files already have uncommitted changes; commit them first. No files were changed.');
-  }
-  const tag = `v${options.version}`;
-  git(['check-ref-format', `refs/tags/${tag}`]);
-  if (git(['tag', '--list', tag])) {
-    if (previous !== options.version || git(['diff', '--name-only', `${tag}^{commit}`, 'main', '--', ...VERSION_FILES])) {
-      throw new Error(`Version tag ${tag} already exists for different version files; use a new version. No files were changed.`);
+  const root = mainWorktree();
+  process.chdir(root);
+  const mainGit = args => git(args, root);
+  const common = fs.realpathSync(path.resolve(root, mainGit(['rev-parse', '--git-common-dir'])));
+  // 所有版本修改、提交和 Tag 均在 main 上执行，不创建或切换其他分支。
+  withLock(common, 'main', () => {
+    if (mainGit(['branch', '--show-current']) !== 'main') throw new Error('The main worktree changed branches; retry. No files were changed.');
+    mainGit(['ls-files', '--error-unmatch', '--', ...VERSION_FILES]);
+    const previous = readVersion(root);
+    const changelog = fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
+    if (options.commit && mainGit(['status', '--porcelain', '--untracked-files=all', '--', ...VERSION_FILES])) {
+      throw new Error('Version files already have uncommitted changes on main; commit them first. No files were changed.');
     }
-    console.log(`Version ${options.version} is already committed and tagged as ${tag}; no changes needed.`);
-    return;
-  }
-  const before = previous.split('.').map(Number), after = options.version.split('.').map(Number);
-  const delta = [0, 1, 2].map(i => (after[i] || 0) - (before[i] || 0)).find(value => value !== 0);
-  if (delta < 0) throw new Error('The new version must not be lower than VERSION. No files were changed.');
-
-  const common = fs.realpathSync(path.resolve(ROOT, git(['rev-parse', '--git-common-dir'])));
-  const base = git(['rev-parse', 'main']);
-  const changelog = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
-  if (previous === options.version && changelog.split(/\r?\n/).some(line => line.startsWith(`## [${options.version}] - `))) {
-    withLock(common, 'bump-version', () => {
-      if (git(['rev-parse', 'main']) !== base) throw new Error('main changed; rerun the release preparation.');
-      if (options.tag) tagVersion(options.version, base);
-    });
-    console.log('No version changes to commit.');
-    return;
-  }
-
-  const id = crypto.randomBytes(3).toString('hex');
-  const branch = `session/bump-${options.version}-${id}`;
-  const worktree = path.join(ROOT, '.worktrees', `bump-${options.version}-${id}`);
-  git(['worktree', 'add', '-b', branch, worktree, base]);
-  let committed = false, merged = false;
-  try {
-    updateFiles(worktree, options);
-    git(['add', '--', ...VERSION_FILES], worktree);
-    git(['diff', '--cached', '--check'], worktree);
-    git(['commit', '-m', `chore: bump version to ${options.version}`], worktree);
-    committed = true;
-    const commit = git(['rev-parse', 'HEAD'], worktree);
-    withLock(common, branch, () => {
-      if (git(['rev-parse', 'main']) !== base || git(['branch', '--show-current']) !== 'main') {
-        throw new Error('main changed during preparation; synchronize and validate the preserved release worktree before merging.');
+    const tag = `v${options.version}`;
+    mainGit(['check-ref-format', `refs/tags/${tag}`]);
+    if (mainGit(['tag', '--list', tag])) {
+      if (previous !== options.version || mainGit(['diff', '--name-only', `${tag}^{commit}`, 'main', '--', ...VERSION_FILES])) {
+        throw new Error(`Version tag ${tag} already exists for different version files; use a new version. No files were changed.`);
       }
-      // 普通快进保留 main 上无关的暂存或未提交修改，不使用 stash/reset。
-      git(['merge', '--ff-only', '--no-overwrite-ignore', commit]);
-      git(['merge-base', '--is-ancestor', commit, 'main']);
-      merged = true;
-      if (options.tag) tagVersion(options.version, commit);
-    });
-    console.log(`Updated VERSION ${previous} -> ${options.version}; committed and merged ${commit} into main.`);
-  } catch (error) {
-    if (!merged) {
-      throw new Error(`${committed ? 'Version commit was kept' : 'Version files were updated, but the commit failed'} in ${worktree} (${branch}): ${error.message}\nThe original worktree was not modified. Inspect the preserved task worktree before retrying.`);
+      console.log(`Version ${options.version} is already committed and tagged as ${tag}; no changes needed.`);
+      return;
     }
-    throw error;
-  } finally {
-    if (merged) {
-      // 只清理本次创建且已合入 main 的准确分支和 worktree。
-      if (git(['status', '--porcelain', '--untracked-files=all', '--ignored'], worktree)) {
-        console.error(`Preserved nonempty release worktree: ${worktree}`);
-      } else {
-        git(['merge-base', '--is-ancestor', branch, 'main']);
-        const tip = git(['rev-parse', branch]);
-        git(['worktree', 'remove', worktree]);
-        withLock(common, branch, () => {
-          if (git(['rev-parse', branch]) !== tip || git(['branch', '--show-current']) !== 'main') throw new Error(`Preserved branch ${branch}: references changed.`);
-          git(['merge-base', '--is-ancestor', branch, 'main']);
-          git(['branch', '-d', branch]);
-        });
-      }
+    const before = previous.split('.').map(Number), after = options.version.split('.').map(Number);
+    const delta = [0, 1, 2].map(i => (after[i] || 0) - (before[i] || 0)).find(value => value !== 0);
+    if (delta < 0) throw new Error('The new version must not be lower than VERSION. No files were changed.');
+
+    if (!options.commit) {
+      updateFiles(root, options);
+      console.log(`Updated VERSION ${previous} -> ${options.version} and CHANGELOG.md on main; skipped commit and tag (--no-commit).`);
+      return;
     }
-  }
-  console.log(options.tag ? `Ready for: git push origin main ${tag}` : `Skipped tag (--no-tag). Ready for: git push origin main`);
+    if (previous === options.version && changelog.split(/\r?\n/).some(line => line.startsWith(`## [${options.version}] - `))) {
+      if (options.tag) tagVersion(options.version, mainGit(['rev-parse', 'main']), root);
+      console.log('No version changes to commit.');
+      return;
+    }
+
+    updateFiles(root, options);
+    try {
+      mainGit(['diff', '--check', '--', ...VERSION_FILES]);
+      // --only 只提交版本文件，保留其他路径的暂存内容。
+      mainGit(['commit', '--only', '-m', `chore: bump version to ${options.version}`, '--', ...VERSION_FILES]);
+    } catch (error) {
+      throw new Error(`Version files were updated on main, but the commit failed: ${error.message}\nChanges were kept in ${root}. Fix Git identity/signing and commit only VERSION and CHANGELOG.md before retrying.`);
+    }
+    const commit = mainGit(['rev-parse', 'main']);
+    if (options.tag) tagVersion(options.version, commit, root);
+    console.log(`Updated VERSION ${previous} -> ${options.version}; committed ${commit} on main.`);
+    console.log(options.tag ? `Ready for: git push origin main ${tag}` : 'Skipped tag (--no-tag). Ready for: git push origin main');
+  });
 }
 
 if (require.main === module) {

@@ -86,7 +86,8 @@ CI 根据它生成安装包的版本元数据，不需要手动同步 `wails.jso
 这样的两段、三段数字，每段不超过 65535。
 
 版本制作机制参考 [CodeSearch](https://github.com/OscarKing888/CodeSearch)，bump 脚本需要
-Node.js 22 或更新版本及 Git。在检出 `main` 的仓库中运行：
+Node.js 22 或更新版本及 Git。可从任意分支的 worktree 运行，脚本会定位到同一仓库中检出
+`main` 的 worktree；如果没有检出 `main`，会停止并提示先检出，不自动切换调用方分支：
 
 ```sh
 # macOS / Linux
@@ -98,15 +99,16 @@ Node.js 22 或更新版本及 Git。在检出 `main` 的仓库中运行：
 .\bump-version.bat 0.1.1 --notes "本次版本的更新说明"
 ```
 
-脚本更新 `VERSION` 和 `CHANGELOG.md`，在独立 worktree 提交版本变更，快进合并到 `main`，
-创建附注 Tag `v0.1.1`，再清理本次临时资源。它保留无关的暂存或未提交内容，版本文件有未提交
-修改时会停止；已有 Tag 不会被覆盖。提交失败保留任务 worktree，Tag 创建失败保留已合并的提交，
-修复 Git 身份或签名设置后可用同一版本重试。
+脚本直接在 `main` 的 worktree 更新 `VERSION` 和 `CHANGELOG.md`，只提交这两个文件，
+然后在该 `main` 提交上创建附注 Tag `v0.1.1`。不创建临时分支或 worktree，所有操作使用
+仓库级锁串行执行。它保留调用方的分支和改动，以及 `main` 上无关的暂存或未提交内容；自动
+提交时，版本文件有未提交修改会停止。已有 Tag 不会被覆盖。提交失败保留 `main` 上的版本
+文件修改，修复 Git 设置后只提交这两个文件；Tag 创建失败保留版本提交，修复后可用同一版本重试。
 
 - `--notes` 可重复使用；`--date YYYY-MM-DD` 指定更新记录日期。
-- `--no-tag` 提交并合并版本变更，不创建 Tag。
-- `--no-commit` 只修改当前目录的版本文件，不提交或打 Tag；已有任务 worktree 中使用此模式，
-  然后按仓库协作流程验证、提交、合并及打 Tag。
+- `--no-tag` 在 `main` 提交版本变更，不创建 Tag。
+- `--no-commit` 同样只修改 `main` worktree 的版本文件，不提交或打 Tag；不支持无 Git 仓库的
+  源码压缩包。检查并验证后，只提交 `VERSION` 和 `CHANGELOG.md`，再在该 `main` 提交上打 Tag。
 
 脚本不自动推送。检查更新说明并完成本地构建验证后，推送对应版本：
 
