@@ -251,6 +251,25 @@ async function copyPath(path) {
   } catch (err) { toast("复制失败：" + String(err)); }
 }
 async function revealPath(path) { try { await api().Reveal(path); } catch (err) { toast(String(err)); } }
+// 目录本身不删除；可把其中达到「单个文件至少」阈值的文件一次加入待删除，打开菜单后再统计数量。
+function dirFilesItem(dir) {
+  const mb = Math.max(1, num("fileMin", 500));
+  return {
+    label: `正在查找其中 ≥ ${mb} MB 的文件…`, hint: "目录本身不会删除", disabled: true,
+    async load() {
+      const res = await api().QueryDirFiles(dir.path, Math.round(mb * 1e6));
+      const files = res.rows.filter((r) => !graph.collected.has(r.path)).map((r) => rowNode(r, "file"));
+      const size = graphSize(files.reduce((sum, f) => sum + f.alloc, 0));
+      if (!res.total) return { label: `其中没有 ≥ ${mb} MB 的文件`, hint: "阈值与「单个文件至少」设置相同" };
+      if (!files.length) return { label: "其中的大文件均已在待删除中", hint: `共 ${res.total} 个 ≥ ${mb} MB 的文件` };
+      return {
+        label: `将其中 ${files.length} 个 ≥ ${mb} MB 的文件加入待删除`,
+        hint: `共 ${size}${res.total > res.rows.length ? `，按大小取前 ${res.rows.length} 个` : ""}；目录本身不会删除`,
+        disabled: scanning || trashing, run: () => graph.collectMany(files),
+      };
+    },
+  };
+}
 function contextItems({ node, from }) {
   const busy = scanning || trashing, items = [];
   if (node.kind === "file") {
@@ -263,7 +282,7 @@ function contextItems({ node, from }) {
   } else if (node.kind === "dir") {
     if (from === "list") items.push({ label: "在图形中查看", run: () => { setResultView("graph"); graph.showDirectory(node.path); }, disabled: scanning });
     else if (graph.mode === "dirs") items.push({ label: "进入目录", run: () => graph.activate(node), disabled: scanning });
-    items.push({ label: "加入待删除", hint: "目录不能删除，只能删除其中的文件", disabled: true });
+    items.push(dirFilesItem(node));
   }
   if (node.path) {
     items.push({ separator: true });
@@ -273,23 +292,43 @@ function contextItems({ node, from }) {
   return items;
 }
 const contextMenu = {
-  el: $("contextMenu"), items: [], restore: null,
+  el: $("contextMenu"), items: [], restore: null, serial: 0,
+  html(item, i) {
+    return item.separator ? '<hr>' : `<button role="menuitem" data-i="${i}" ${item.disabled ? 'disabled' : ''} ${item.hint ? `title="${esc(item.hint)}"` : ''}>${esc(item.label)}${item.hint ? `<small>${esc(item.hint)}</small>` : ''}</button>`;
+  },
+  // 异步项目（如目录中的大文件数量）返回后只替换该项；菜单已关闭或重新打开则忽略。
+  async load(index, serial) {
+    let next;
+    try { next = await this.items[index].load(); }
+    catch (err) { next = { label: "无法统计其中的文件", hint: String(err) }; }
+    if (serial !== this.serial || this.el.hidden) return;
+    this.items[index] = next = { disabled: !next.run, ...next };
+    const button = this.el.querySelector(`button[data-i="${index}"]`);
+    if (button) button.outerHTML = this.html(next, index);
+    this.place(this.x, this.y);
+  },
+  place(x, y) {
+    this.x = x; this.y = y;
+    const w = this.el.offsetWidth, h = this.el.offsetHeight;
+    this.el.style.left = Math.max(4, Math.min(x, innerWidth - w - 4)) + "px";
+    this.el.style.top = Math.max(4, Math.min(y, innerHeight - h - 4)) + "px";
+  },
   open(target, x, y) {
     const items = contextItems(target);
     graph.cancelHover();
     this.items = items; this.restore = document.activeElement;
     this.el.innerHTML = `<div class="contextTitle" title="${esc(target.node.path || target.node.name)}">${esc(target.node.name)}</div>` +
-      items.map((item, i) => item.separator ? '<hr>' : `<button role="menuitem" data-i="${i}" ${item.disabled ? 'disabled' : ''} ${item.hint ? `title="${esc(item.hint)}"` : ''}>${esc(item.label)}${item.hint ? `<small>${esc(item.hint)}</small>` : ''}</button>`).join("");
+      items.map((item, i) => this.html(item, i)).join("");
+    const serial = ++this.serial;
+    items.forEach((item, i) => { if (item.load) this.load(i, serial); });
     this.el.hidden = false;
-    const w = this.el.offsetWidth, h = this.el.offsetHeight;
-    this.el.style.left = Math.max(4, Math.min(x, innerWidth - w - 4)) + "px";
-    this.el.style.top = Math.max(4, Math.min(y, innerHeight - h - 4)) + "px";
+    this.place(x, y);
     const first = this.el.querySelector("button:not(:disabled)");
     if (first) first.focus(); else this.el.focus();
   },
   close(restoreFocus) {
     if (this.el.hidden) return;
-    this.el.hidden = true; this.items = [];
+    this.el.hidden = true; this.items = []; ++this.serial;
     if (restoreFocus && this.restore && this.restore.focus) this.restore.focus();
     this.restore = null;
   },

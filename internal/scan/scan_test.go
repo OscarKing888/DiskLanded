@@ -224,6 +224,28 @@ func TestQueries(t *testing.T) {
 	}
 }
 
+func TestQueryFilesUnder(t *testing.T) {
+	root := filepath.Join(string(filepath.Separator), "data")
+	p := func(parts ...string) string { return filepath.Join(append([]string{root}, parts...)...) }
+	r := &Result{Files: []FileRec{
+		{Path: p("a", "small.bin"), Alloc: 100e6},
+		{Path: p("a", "big.bin"), Alloc: 2e9},
+		{Path: p("a", "deep", "mid.bin"), Alloc: 700e6},
+		{Path: p("ab", "sibling.bin"), Alloc: 9e9},
+		{Path: p("b", "other.bin"), Alloc: 5e9},
+	}}
+	rows, n := r.QueryFilesUnder(p("a"), 500e6, 10)
+	if n != 2 || len(rows) != 2 || rows[0].Path != p("a", "big.bin") || rows[1].Path != p("a", "deep", "mid.bin") {
+		t.Errorf("files under a: %d %v", n, rows)
+	}
+	if rows, n := r.QueryFilesUnder(p("a"), 1, 1); n != 3 || len(rows) != 1 || rows[0].Path != p("a", "big.bin") {
+		t.Errorf("limit keeps the largest: %d %v", n, rows)
+	}
+	if _, n := r.QueryFilesUnder(root+string(filepath.Separator), 1, 10); n != 5 {
+		t.Errorf("trailing separator root: %d", n)
+	}
+}
+
 func TestVolumes(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	v, bad := Volumes([]string{home, home})

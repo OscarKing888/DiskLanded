@@ -235,6 +235,25 @@ func (a *App) QueryFiles(minBytes int64, days int) FilesResp {
 	return FilesResp{rows, n}
 }
 
+// QueryDirFiles lists large files inside a scanned directory so the UI can
+// queue them for the trash; the directory itself is never deleted.
+func (a *App) QueryDirFiles(dir string, minBytes int64) (FilesResp, error) {
+	a.mu.Lock()
+	r := a.result
+	a.mu.Unlock()
+	if r == nil {
+		return FilesResp{Rows: []scan.FileRow{}}, errors.New("请先扫描目录")
+	}
+	if isDir, ok := r.Contains(dir); !ok || !isDir {
+		return FilesResp{Rows: []scan.FileRow{}}, errors.New("该目录不在扫描结果中")
+	}
+	if minBytes < scan.FileFloor {
+		minBytes = scan.FileFloor
+	}
+	rows, n := r.QueryFilesUnder(dir, minBytes, maxRows)
+	return FilesResp{rows, n}, nil
+}
+
 // QueryGraph builds a cached, complete directory hierarchy and returns only the visible subtree.
 func (a *App) QueryGraph(path string) (scan.GraphView, error) {
 	a.mu.Lock()

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -70,5 +71,28 @@ func TestTrashUpdatesOnlyAfterSuccess(t *testing.T) {
 	}
 	if err := app.trashFile("first", func(string) error { t.Fatal("deleted same file twice"); return nil }); err == nil {
 		t.Fatal("accepted duplicate deletion")
+	}
+}
+
+func TestQueryDirFilesOnlyForScannedDirectories(t *testing.T) {
+	app := &App{result: &scan.Result{
+		Dirs: []scan.DirRec{{Path: filepath.Join("root", "dir"), Alloc: 3_000_000}},
+		Files: []scan.FileRec{
+			{Path: filepath.Join("root", "dir", "big"), Alloc: 2_000_000},
+			{Path: filepath.Join("root", "dir", "tiny"), Alloc: 500_000},
+			{Path: filepath.Join("root", "elsewhere"), Alloc: 9_000_000},
+		},
+	}}
+	got, err := app.QueryDirFiles(filepath.Join("root", "dir"), 0)
+	if err != nil || got.Total != 1 || got.Rows[0].Path != filepath.Join("root", "dir", "big") {
+		t.Fatalf("dir files: %+v %v", got, err)
+	}
+	for _, path := range []string{filepath.Join("root", "dir", "big"), "unscanned"} {
+		if _, err := app.QueryDirFiles(path, 0); err == nil {
+			t.Errorf("accepted non-directory %q", path)
+		}
+	}
+	if _, err := NewApp().QueryDirFiles("root", 0); err == nil {
+		t.Error("accepted query without results")
 	}
 }
