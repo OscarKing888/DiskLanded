@@ -32,6 +32,7 @@ go.work.sum
 # .vscode/
 
 # Wails build output and generated bindings
+build/
 build/bin/
 frontend/wailsjs/
 dist/
