@@ -81,11 +81,50 @@ wails build -skipbindings -tags webkit2_41
 
 ## 版本与发布
 
-- 版本号只在根目录 `VERSION` 维护（当前 `0.1`），编译时嵌入，显示在窗口顶部「新占」旁（如 `v0.1`）。
-- 发布：修改 `VERSION` 并合入 `main` 后，对该提交打附注 Tag `v<VERSION>` 并推送，例如
-  `git tag -a v0.1 -m "DiskLanded v0.1" && git push origin v0.1`。
-- CI 只在推送 `v*` Tag（或手动触发）时运行：先校验 Tag 与 `VERSION` 一致，再在三种系统上测试、构建、启动，
-  产物名为 `DiskLanded-v<版本>-<系统>`。
+版本号只在根目录 `VERSION` 维护，编译时嵌入，显示在窗口顶部「新占」旁（如 `v0.1`）。
+CI 根据它生成安装包的版本元数据，不需要手动同步 `wails.json`。版本支持 `0.1` 或 `0.1.1`
+这样的两段、三段数字，每段不超过 65535。
+
+版本制作机制参考 [CodeSearch](https://github.com/OscarKing888/CodeSearch)，bump 脚本需要
+Node.js 22 或更新版本及 Git。在检出 `main` 的仓库中运行：
+
+```sh
+# macOS / Linux
+./bump-version.sh 0.1.1 --notes "本次版本的更新说明"
+```
+
+```bat
+:: Windows x64，PowerShell 也可运行
+.\bump-version.bat 0.1.1 --notes "本次版本的更新说明"
+```
+
+脚本更新 `VERSION` 和 `CHANGELOG.md`，在独立 worktree 提交版本变更，快进合并到 `main`，
+创建附注 Tag `v0.1.1`，再清理本次临时资源。它保留无关的暂存或未提交内容，版本文件有未提交
+修改时会停止；已有 Tag 不会被覆盖。提交失败保留任务 worktree，Tag 创建失败保留已合并的提交，
+修复 Git 身份或签名设置后可用同一版本重试。
+
+- `--notes` 可重复使用；`--date YYYY-MM-DD` 指定更新记录日期。
+- `--no-tag` 提交并合并版本变更，不创建 Tag。
+- `--no-commit` 只修改当前目录的版本文件，不提交或打 Tag；已有任务 worktree 中使用此模式，
+  然后按仓库协作流程验证、提交、合并及打 Tag。
+
+脚本不自动推送。检查更新说明并完成本地构建验证后，推送对应版本：
+
+```sh
+git push origin main v0.1.1
+```
+
+`.github/workflows/build.yml` 只在推送 `v*` Tag 或手动触发时运行。CI 校验 Tag 等于
+`v` + `VERSION`，执行脚本和前端测试，再在三种系统上执行 Go 测试、构建及启动检查。
+推送 Tag 后自动创建 GitHub Release，附上对应版本的 CHANGELOG、GitHub 生成的更新说明及：
+
+- `DiskLanded-v<版本>-macos-universal.zip`：Intel / Apple Silicon 通用 `.app`。
+- `DiskLanded-v<版本>-windows-x64.zip`：Windows x64 `.exe`。
+- `DiskLanded-v<版本>-linux-x64.tar.gz`：Linux x64 可执行文件。
+- `SHA256SUMS.txt`：三个安装包的 SHA-256 校验值。
+
+手动选择分支运行 Action 时仅生成可下载的构建产物；选择版本 Tag 时也会发布该版本。
+已发布的 Tag 不移动或重打；发布修复时使用新版本号。
 
 ## 协作流程
 
@@ -96,7 +135,7 @@ wails build -skipbindings -tags webkit2_41
 
 ```sh
 go test ./internal/...                                          # 单元测试
-node --test frontend/graph.test.cjs                              # 环形图几何与层级测试（需要 Node.js，仅用于测试）
+node --test frontend/graph.test.cjs scripts/*.test.cjs             # 图形、版本制作及打包校验（需要 Node.js 22+）
 DISKLANDED_HOME_SCAN=1 go test -v -run TestHomeScan ./internal/scan   # 扫描真实主目录
 DISKLANDED_GUI=1 go test -v ./internal/reveal                    # 在 Finder / 资源管理器中实际定位文件
 ```

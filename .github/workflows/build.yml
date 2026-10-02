@@ -1,103 +1,183 @@
-name: build
+name: Build and Release
 
-# Runs only for release tags (v + VERSION, e.g. v0.1) or when started by hand.
+# Adapted from CodeSearch's Release workflow: validate, build, package, publish.
+# CodeSearch's MIT notice is retained in scripts/CODESEARCH-LICENSE.txt.
 on:
   push:
     tags:
-      - "v*"
+      - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Validate VERSION and release tag
+        id: version
+        run: node scripts/release.js check
+      - name: Test version preparation, packaging validation and graph geometry
+        run: node --test scripts/bump-version.test.cjs scripts/release.test.cjs frontend/graph.test.cjs
+
   build:
+    needs: validate
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-24.04
-            wails_flags: -tags webkit2_41
-            artifact: build/bin/DiskLanded
-          - os: macos-latest
+            platform: linux-x64
+            go_flags: -tags webkit2_41
+            wails_flags: -tags webkit2_41 -platform linux/amd64
+          - os: macos-15
+            platform: macos-universal
+            go_flags: ''
             wails_flags: -platform darwin/universal
-            artifact: build/bin/DiskLanded.app
-          - os: windows-latest
-            wails_flags: ""
-            artifact: build/bin/DiskLanded.exe
+          - os: windows-2022
+            platform: windows-x64
+            go_flags: ''
+            wails_flags: -platform windows/amd64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-
-      - name: Read version and check tag
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Derive native product version from VERSION
         id: version
-        shell: pwsh
-        run: |
-          $v = (Get-Content VERSION -Raw).Trim()
-          if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}" -ne "v$v") {
-            throw "Tag ${{ github.ref_name }} does not match VERSION $v (expected v$v)"
-          }
-          # Windows/macOS file versions need three numeric parts: 0.1 -> 0.1.0
-          $parts = @($v.Split('.')); while ($parts.Count -lt 3) { $parts += '0' }
-          $json = Get-Content wails.json -Raw | ConvertFrom-Json
-          $json.info.productVersion = ($parts -join '.')
-          $json | ConvertTo-Json -Depth 10 | Set-Content wails.json -Encoding utf8
-          "version=$v" >> $env:GITHUB_OUTPUT
-          Write-Host "DiskLanded v$v (productVersion $($json.info.productVersion))"
-
+        run: node scripts/release.js prepare
       - name: Linux dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev xvfb
-
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libglib2.0-bin xvfb
       - name: Vet
-        run: go vet ./internal/...
-
-      - name: Unit tests (tree totals, links, permission denied, timestamps, filters)
-        run: go test -count=1 -v . ./internal/...
-
+        run: go vet ${{ matrix.go_flags }} ./internal/...
+      - name: Unit tests
+        run: go test ${{ matrix.go_flags }} -count=1 -v . ./internal/...
       - name: Scan the real home directory
         env:
-          DISKLANDED_HOME_SCAN: "1"
-        run: go test -count=1 -v -timeout 25m -run TestHomeScan ./internal/scan
-
+          DISKLANDED_HOME_SCAN: '1'
+        run: go test ${{ matrix.go_flags }} -count=1 -v -timeout 25m -run TestHomeScan ./internal/scan
       - name: Reveal in the system file manager
         if: runner.os != 'Linux'
         continue-on-error: true
         env:
-          DISKLANDED_GUI: "1"
-        run: go test -count=1 -v -run "Finder|Explorer|OpenArgs|CmdLine" ./internal/reveal
-
-      - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
-
+          DISKLANDED_GUI: '1'
+        run: go test -count=1 -v -run 'Finder|Explorer|OpenArgs|CmdLine' ./internal/reveal
+      - name: Install project-matched Wails CLI
+        shell: pwsh
+        run: |
+          $version = & go list -m -f '{{.Version}}' github.com/wailsapp/wails/v2
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($version)) { throw 'Cannot resolve Wails version' }
+          & go install "github.com/wailsapp/wails/v2/cmd/wails@$version"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build app
-        run: wails build -skipbindings -trimpath ${{ matrix.wails_flags }}
-
+        run: wails build -skipbindings -trimpath -m -nosyncgomod ${{ matrix.wails_flags }}
       - name: Launch smoke test (Linux)
         if: runner.os == 'Linux'
+        shell: bash
         run: |
-          xvfb-run -a ./build/bin/DiskLanded & sleep 10
-          pgrep -x DiskLanded && pkill -x DiskLanded
-
+          xvfb-run -a ./build/bin/DiskLanded &
+          launcher=$!
+          trap 'kill "$launcher" 2>/dev/null || true' EXIT
+          sleep 10
+          kill -0 "$launcher"
+          pgrep -x DiskLanded
+          pkill -x DiskLanded
       - name: Launch smoke test (macOS)
         if: runner.os == 'macOS'
+        shell: bash
         run: |
-          file build/bin/DiskLanded.app/Contents/MacOS/DiskLanded
-          open build/bin/DiskLanded.app; sleep 10
-          pgrep -x DiskLanded && pkill -x DiskLanded
-
+          lipo -archs build/bin/DiskLanded.app/Contents/MacOS/DiskLanded | grep 'x86_64.*arm64\|arm64.*x86_64'
+          open build/bin/DiskLanded.app
+          trap 'pkill -x DiskLanded || true' EXIT
+          sleep 10
+          pgrep -x DiskLanded
       - name: Launch smoke test (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $p = Start-Process -FilePath build\bin\DiskLanded.exe -PassThru
-          Start-Sleep 10
-          if ($p.HasExited) { throw "DiskLanded exited with $($p.ExitCode)" }
-          Get-Process -Id $p.Id | Format-List Name, Id, MainWindowTitle
-          Stop-Process -Id $p.Id
-
-      - uses: actions/upload-artifact@v4
+          $app = Start-Process -FilePath build\bin\DiskLanded.exe -PassThru
+          try {
+            Start-Sleep 10
+            if ($app.HasExited) { throw "DiskLanded exited with $($app.ExitCode)" }
+            Get-Process -Id $app.Id | Format-List Name, Id, MainWindowTitle
+          } finally {
+            if (-not $app.HasExited) { Stop-Process -Id $app.Id }
+          }
+      - name: Package macOS universal app
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent build/bin/DiskLanded.app "dist/DiskLanded-v${VERSION}-macos-universal.zip"
+      - name: Package Windows x64 app
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Compress-Archive -LiteralPath build/bin/DiskLanded.exe -DestinationPath "dist/DiskLanded-v$($env:VERSION)-windows-x64.zip"
+      - name: Package Linux x64 app
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p dist
+          tar -czf "dist/DiskLanded-v${VERSION}-linux-x64.tar.gz" -C build/bin DiskLanded
+      - name: Generate package checksum
+        run: node scripts/release.js checksum ${{ matrix.platform }}
+      - uses: actions/upload-artifact@v6
         with:
-          name: DiskLanded-v${{ steps.version.outputs.version }}-${{ runner.os }}
-          path: ${{ matrix.artifact }}
+          name: DiskLanded-v${{ steps.version.outputs.version }}-${{ matrix.platform }}
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [validate, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: DiskLanded-v${{ needs.validate.outputs.version }}-*
+          path: dist
+          merge-multiple: true
+      - name: Verify all platform packages and extract version notes
+        run: node scripts/release.js verify
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: DiskLanded v${{ needs.validate.outputs.version }}
+          body_path: dist/release-notes.md
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/SHA256SUMS.txt
