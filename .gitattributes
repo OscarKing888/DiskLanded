@@ -1,0 +1,2 @@
+# cmd 在仅 LF 换行的批处理中可能找错 goto 标签。
+*.bat text eol=crlf
