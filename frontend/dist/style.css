@@ -121,6 +121,15 @@ body[data-view=graph] .resultTabs button { padding: 6px 20px; }
 .volumeSection[open] .volumes { margin-top: 8px; }
 #sunburst path { stroke: var(--graph-bg); stroke-width: .8; cursor: pointer; }
 #graphHover, #graphHover * { pointer-events: none; }
+#graphView[data-mode=files] .graphNavigation { display: none; }
+#sunburst .bubble { cursor: pointer; transition: opacity .12s; }
+#sunburst .bubble circle { stroke: var(--graph-bg); stroke-width: 1.2; }
+#sunburst.dim .bubble:not(.on) { opacity: .22; }
+#sunburst .bubble.on circle { stroke: #fff; stroke-width: 1.8; }
+#sunburst .bubble text { fill: #1b1e24; text-anchor: middle; font-weight: 600; pointer-events: none; font-variant-numeric: tabular-nums; }
+#sunburst .timelineGrid { stroke: #ffffff10; }
+#sunburst .timelineAxis { stroke: var(--graph-line); stroke-width: 1.2; }
+#sunburst .timelineTick { fill: var(--graph-muted); font-size: 13px; text-anchor: middle; }
 #sunburst #graphHoverOutline { fill: none; stroke: #fff; stroke-width: 1.6; }
 .graphCenter { cursor: pointer; }
 .graphCenter circle { fill: var(--graph-bg); }

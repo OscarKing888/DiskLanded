@@ -34,7 +34,7 @@
     <span>同一份扫描结果，两种查看方式</span>
   </div>
 
-  <section id="graphView" role="tabpanel" aria-labelledby="graphTab">
+  <section id="graphView" role="tabpanel" aria-labelledby="graphTab" data-mode="dirs">
     <div class="graphPanel">
       <div class="graphToolbar">
         <div class="graphModes" role="group" aria-label="图形内容">
@@ -56,13 +56,13 @@
           <svg id="sunburst" viewBox="0 0 640 640" role="group" aria-label="目录占用环形图"></svg>
           <div id="graphEmpty" class="graphEmpty"><strong>看清每一份空间</strong><span>添加目录并扫描，即可查看占用分布</span></div>
           <div id="graphTooltip" class="graphTooltip" hidden></div>
-          <p class="graphGuide">悬停查看详情 · 点击目录深入 · 点击圆心返回上层</p>
+          <p id="graphGuide" class="graphGuide">悬停查看详情 · 点击目录深入 · 点击圆心返回上层</p>
         </div>
         <aside class="graphSidebar" aria-label="图形明细">
           <div class="graphHeading"><h2 id="graphTitle">扫描目录</h2><strong id="graphTotal">—</strong></div>
           <p id="graphPath" class="graphPath">扫描后显示目录和文件明细</p>
           <div id="graphLegend" class="graphLegend"></div>
-          <div id="graphDetail" class="graphDetail"><p>彩色扇区表示目录层级，扇区越宽，占用越大。</p><p>从左侧图形或这里的明细逐层浏览。</p></div>
+          <div id="graphDetail" class="graphDetail"><p>彩色扇区表示目录层级，扇区越宽，占用越大。</p><p>切换到「新出现的文件」可按出现日期查看最近新增的大文件。</p></div>
         </aside>
       </div>
       <div id="collector" class="collector" aria-label="待删除文件区">

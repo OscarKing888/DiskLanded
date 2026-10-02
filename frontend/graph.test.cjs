@@ -69,7 +69,7 @@ function hoverHarness() {
     sectorByNode:new Map(),legendByNode:new Map(),highlighted:null});
   const nodes = Array.from({length:2000},(_,i)=>({path:'/root/'+i,name:'file '+i,kind:'file',alloc:1,logical:1}));
   nodes.forEach((node,index)=>graph.sectorByNode.set(node,{index,d:'sector-'+index}));
-  return {graph,nodes,counters,$,frames,graphMarkup,flush() { const jobs=[...frames.values()]; frames.clear(); jobs.forEach(fn=>fn()); }};
+  return {graph,nodes,counters,$,frames,graphMarkup,exports:context.module.exports,flush() { const jobs=[...frames.values()]; frames.clear(); jobs.forEach(fn=>fn()); }};
 }
 
 test('bursts of hover events apply only the latest target once per frame', () => {
@@ -153,4 +153,83 @@ test('sector colours follow angular position and grey out grouped items', () => 
   assert.equal(colors.get(a.children[1]),graphOtherColor);
   const only={path:'/only',kind:'dir',alloc:5,children:[]};
   assert.equal(graphSegments({alloc:5,children:[only]})[0].color,graphColor(.5,0));
+});
+
+const day=86400, now=1790000000;
+function newFile(path,gb,daysAgo){ const alloc=gb*1e9; return {path,alloc,logical:alloc,appeared:now-daysAgo*day,modified:now-daysAgo*day,appearedIsMtime:false}; }
+
+test('new files are grouped by folder, with a merged group beyond the colour limit', () => {
+  const {fileTimeline}=require('./dist/graph.js');
+  const rows=[newFile('/u/Downloads/a.dmg',4,1),newFile('/u/Downloads/b.iso',2,3),newFile('C:\\Users\\me\\Videos\\c.mp4',3,2),newFile('/top.bin',1,5)];
+  for (let i=0;i<10;i++) rows.push(newFile(`/u/many/${i}/f.bin`,0.5,i));
+  const data=fileTimeline(rows,60,now);
+  const byPath=new Map(data.root.children.map(g=>[g.path,g]));
+  assert.equal(byPath.get('/u/Downloads').count,2);
+  assert.equal(byPath.get('/u/Downloads').name,'Downloads');
+  assert.equal(byPath.get('C:\\Users\\me\\Videos').name,'Videos');
+  assert.equal(data.root.children.length,9);
+  const other=data.root.children.at(-1);
+  assert(other.other && other.path==='');
+  assert.equal(data.root.alloc,data.root.children.reduce((s,g)=>s+g.alloc,0));
+  assert.equal(data.files.filter(f=>f.group===other).length,other.count);
+  assert.equal(new Set(data.root.children.map(g=>g.color)).size,9);
+  assert.equal(data.files[0].group,byPath.get('/u/Downloads'));
+  const root=fileTimeline([newFile('/top.bin',1,1),newFile('C:\\x.bin',1,1)],60,now).root.children.map(g=>g.path).sort();
+  assert.deepEqual(root,['/','C:\\']);
+});
+
+test('timeline places newer files to the right without overlapping bubbles', () => {
+  const {fileTimeline,timelineLayout,timelineBox}=require('./dist/graph.js');
+  const rows=[];
+  for (let i=0;i<120;i++) rows.push(newFile(`/u/d${i%7}/f${i}.bin`,0.5+(i*37%23),i%4===0?2:(i*13)%58));
+  const data=fileTimeline(rows,60,now), {points,ticks}=timelineLayout(data);
+  assert.equal(points.length,120);
+  assert.equal(ticks[0].label,'今天');
+  assert(ticks[0].x>ticks.at(-1).x);
+  for (const p of points) {
+    assert(p.y-p.r>=timelineBox.top-0.01 && p.y+p.r<=timelineBox.axis+0.01,'bubble left the plot');
+    assert(!/NaN|Infinity/.test(`${p.x}${p.y}${p.r}`));
+  }
+  for (let i=0;i<points.length;i++) for (let j=i+1;j<points.length;j++) {
+    const a=points[i],b=points[j];
+    assert(Math.hypot(a.x-b.x,a.y-b.y)>=a.r+b.r,'bubbles overlap');
+  }
+  const newest=points.find(p=>p.node.appeared===now-2*day), oldest=points.reduce((m,p)=>p.node.appeared<m.node.appeared?p:m);
+  assert(newest.x>oldest.x);
+  const big=points.reduce((m,p)=>p.node.alloc>m.node.alloc?p:m), small=points.reduce((m,p)=>p.node.alloc<m.node.alloc?p:m);
+  assert(big.r>small.r);
+  assert.deepEqual(timelineLayout(fileTimeline([],60,now)).points,[]);
+});
+
+test('timeline markup keeps labels inside each bubble and escapes names', () => {
+  const h=hoverHarness();
+  const {fileTimeline,timelineLayout,timelineMarkup}=h.exports;
+  const data=fileTimeline([newFile('/u/a/<big>.bin',30,1),newFile('/u/a/small.bin',0.6,2)],60,now);
+  const html=timelineMarkup(timelineLayout(data));
+  assert.equal((html.match(/class="bubble"/g)||[]).length,2);
+  assert(/<g class="bubble"[^>]*><circle[^>]*\/><text[^>]*>30\.0 GB<\/text><\/g>/.test(html),'size label should live inside its bubble group');
+  assert(html.includes('&lt;big&gt;.bin'));
+  assert(!html.includes('<big>'));
+});
+
+test('file bubbles highlight alone or by folder group', () => {
+  const h=hoverHarness();
+  const {fileTimeline}=h.exports;
+  const data=fileTimeline([newFile('/u/a/1.bin',3,1),newFile('/u/a/2.bin',2,2),newFile('/u/b/3.bin',1,3)],60,now);
+  const el=()=>{ const c=new Set(); return {classes:c,classList:{add:k=>c.add(k),remove:k=>c.delete(k),toggle:(k,on)=>on?c.add(k):c.delete(k)}}; };
+  const bubbles=new Map(data.files.map(f=>[f,el()])), groups=new Map();
+  for (const f of data.files) { if(!groups.has(f.group)) groups.set(f.group,[]); groups.get(f.group).push(bubbles.get(f)); }
+  const svg=el(); h.$('sunburst').classList=svg.classList;
+  Object.assign(h.graph,{mode:'files',data,hoverElements:null,bubbleByNode:bubbles,groupBubbles:groups,activeBubbles:[],
+    legendByNode:new Map(data.root.children.map(g=>[g,el()]))});
+  h.graph.highlight(data.root.children[0]);
+  assert.deepEqual(data.files.map(f=>bubbles.get(f).classes.has('on')),[true,true,false]);
+  assert(svg.classes.has('dim'));
+  assert(h.graph.legendByNode.get(data.root.children[0]).classes.has('highlight'));
+  h.graph.highlight(data.files[2]);
+  assert.deepEqual(data.files.map(f=>bubbles.get(f).classes.has('on')),[false,false,true]);
+  assert(h.graph.legendByNode.get(data.root.children[1]).classes.has('highlight'));
+  h.graph.highlight(null);
+  assert(!svg.classes.has('dim'));
+  assert(h.$('graphDetail').html.includes('横轴'));
 });

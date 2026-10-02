@@ -64,6 +64,99 @@ function graphMarkup(segments) {
   return `<g id="graphSectors">${parts.join("")}</g><g id="graphHover" aria-hidden="true" display="none"><use id="graphHoverBranch"/><path id="graphHoverOutline"/></g>`;
 }
 
+// ---------- 新出现的文件：时间线气泡图 ----------
+// 横轴为出现日期，圆面积表示分配大小，颜色区分文件所在目录。
+const timelineBox = { width: 900, height: 440, left: 30, right: 30, top: 16, axis: 396 };
+const timelineLimit = 300, timelineGroups = 9, timelineOtherColor = "#787e8a";
+function splitPath(path) {
+  const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  let dir = cut > 0 ? path.slice(0, cut) : path.slice(0, cut + 1);
+  if (/^[A-Za-z]:$/.test(dir)) dir += "\\";
+  return { dir, name: path.slice(cut + 1) };
+}
+function fileTimeline(rows, days, now = Date.now() / 1000) {
+  const groups = new Map();
+  const files = rows.map((r) => {
+    const { dir, name } = splitPath(r.path);
+    let group = groups.get(dir);
+    if (!group) groups.set(dir, group = { path: dir, name: splitPath(dir.replace(/[\\/]+$/, "")).name || dir, kind: "group", alloc: 0, logical: 0, count: 0, children: [] });
+    group.alloc += r.alloc; group.logical += r.logical; ++group.count;
+    return { path: r.path, name, kind: "file", alloc: r.alloc, logical: r.logical, appeared: r.appeared, modified: r.modified, appearedIsMtime: r.appearedIsMtime, group, children: [] };
+  });
+  let ranked = Array.from(groups.values()).sort((a, b) => b.alloc - a.alloc || (a.path < b.path ? -1 : 1));
+  if (ranked.length > timelineGroups) {
+    const merged = ranked.slice(timelineGroups - 1);
+    const other = { path: "", name: `其他 ${merged.length} 个目录`, kind: "group", other: true, color: timelineOtherColor, children: [],
+      alloc: merged.reduce((s, g) => s + g.alloc, 0), logical: merged.reduce((s, g) => s + g.logical, 0), count: merged.reduce((s, g) => s + g.count, 0) };
+    for (const file of files) if (merged.includes(file.group)) file.group = other;
+    ranked = ranked.slice(0, timelineGroups - 1).concat(other);
+  }
+  ranked.forEach((group, i) => { if (!group.other) group.color = graphColor(i / Math.max(ranked.length, 3) + 0.08, 1); });
+  const root = { path: "", name: "新出现的文件", kind: "group", children: ranked, count: files.length,
+    alloc: files.reduce((s, f) => s + f.alloc, 0), logical: files.reduce((s, f) => s + f.logical, 0) };
+  return { root, files, days: Math.max(1, days), now, breadcrumbs: [] };
+}
+function timelineDate(sec, format) {
+  const d = new Date(sec * 1000), p = (n) => String(n).padStart(2, "0");
+  const year = d.getFullYear(), month = p(d.getMonth() + 1), day = p(d.getDate());
+  return format === "month" ? `${year}-${month}` : format === "day" ? `${month}-${day}` : `${year}-${month}-${day}`;
+}
+function timelineLayout(data) {
+  const { width, left, right, top, axis } = timelineBox;
+  const span = data.days * 86400, start = data.now - span, plot = width - left - right;
+  const xOf = (t) => left + plot * Math.min(1, Math.max(0, (t - start) / span));
+  const step = [1, 2, 7, 14, 30, 60, 90, 180, 365, 730, 1825, 3650, 7300].find((s) => data.days / s <= 6) || 18250;
+  const ticks = [];
+  for (let d = 0; d <= data.days; d += step) ticks.push({ x: xOf(data.now - d * 86400), label: d === 0 ? "今天" : timelineDate(data.now - d * 86400, data.days > 400 ? "month" : "day") });
+  const shown = data.files.slice().sort((a, b) => b.alloc - a.alloc).slice(0, timelineLimit);
+  const largest = shown.length ? shown[0].alloc : 1, middle = (top + axis) / 2, gap = 2;
+  // 由大到小逐个放置：x 取出现日期，y 取离中线最近且不重叠的位置。放不下时先整体缩小半径，
+  // 最后才把圆横向挪到最近的空位，保证任何情况下都不重叠。
+  // 只有横向相距小于两圆半径之和的圆才可能相交。
+  const column = (points, x, r) => {
+    const near = points.filter((p) => Math.abs(p.x - x) < p.r + r + gap), candidates = [middle];
+    for (const p of near) {
+      const dy = Math.sqrt(Math.max(0, (p.r + r + gap) ** 2 - (p.x - x) ** 2));
+      candidates.push(p.y - dy, p.y + dy);
+    }
+    candidates.sort((a, b) => Math.abs(a - middle) - Math.abs(b - middle));
+    return candidates.find((y) => y - r >= top && y + r <= axis - 4 &&
+      near.every((p) => (p.x - x) ** 2 + (p.y - y) ** 2 >= (p.r + r + gap - 0.5) ** 2));
+  };
+  // 圆的总面积不超过绘图区约 35%，避免大小相近的大量文件挤满画面。
+  const weight = shown.reduce((sum, node) => sum + Math.max(0, node.alloc) / largest, 0);
+  const fill = Math.sqrt(0.35 * (width - 4) * (axis - 4 - top) / (Math.PI * 56 * 56 * Math.max(weight, 1)));
+  let points = [];
+  for (let scale = Math.min(1, fill), attempt = 0; attempt < 3; ++attempt, scale *= 0.8) {
+    let shifted = false;
+    points = [];
+    for (const node of shown) {
+      const r = Math.max(3, 56 * scale * Math.sqrt(Math.max(0, node.alloc) / largest));
+      const x0 = Math.min(width - r - 2, Math.max(r + 2, xOf(node.appeared)));
+      let x = x0, y = column(points, x, r);
+      for (let step = 1; y === undefined && step * (r + gap) < width; ++step) {
+        for (const sign of [-1, 1]) {
+          x = x0 + sign * step * (r + gap);
+          if (x - r < 2 || x + r > width - 2) continue;
+          if ((y = column(points, x, r)) !== undefined) break;
+        }
+      }
+      if (y === undefined) { x = x0; y = middle; shifted = true; }
+      shifted ||= x !== x0;
+      points.push({ node, x, y, r, color: node.group.color });
+    }
+    if (!shifted) break;
+  }
+  return { points, ticks };
+}
+function timelineMarkup(layout) {
+  const { width, left, right, top, axis } = timelineBox;
+  const ticks = layout.ticks.map((t) => `<line class="timelineGrid" x1="${t.x.toFixed(1)}" x2="${t.x.toFixed(1)}" y1="${top}" y2="${axis}"/><text class="timelineTick" x="${t.x.toFixed(1)}" y="${axis + 24}">${esc(t.label)}</text>`).join("");
+  // 尺寸标签与圆放在同一组内，悬停变暗时一起变暗。
+  const bubbles = layout.points.map((p, i) => `<g class="bubble" data-node="${i}" tabindex="0" role="button" aria-label="${esc(p.node.name)} ${graphSize(p.node.alloc)}，${timelineDate(p.node.appeared)} 出现"><circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="${p.r.toFixed(1)}" fill="${p.color}"/>${p.r >= 24 ? `<text x="${p.x.toFixed(1)}" y="${(p.y + 4).toFixed(1)}" font-size="${Math.min(14, p.r / 2.6).toFixed(1)}">${graphSize(p.node.alloc)}</text>` : ""}</g>`).join("");
+  return `<g aria-hidden="true">${ticks}<line class="timelineAxis" x1="${left}" x2="${width - right}" y1="${axis}" y2="${axis}"/></g><g id="graphBubbles">${bubbles}</g>`;
+}
+
 class DiskGraph {
   constructor() {
     this.mode = "dirs";
@@ -89,9 +182,9 @@ class DiskGraph {
       if (button) this.navigate(button.dataset.path);
     };
     const hoverSector = (e) => {
-      const path = e.target.closest("path[data-node]");
-      this.queueHover(path ? this.segments[+path.dataset.node].node : this.selected,
-        path ? { x: e.clientX, y: e.clientY } : null);
+      const target = e.target.closest("[data-node]");
+      this.queueHover(target ? this.segments[+target.dataset.node].node : this.selected,
+        target ? { x: e.clientX, y: e.clientY } : null);
     };
     $("sunburst").addEventListener("pointerover", hoverSector);
     $("sunburst").addEventListener("pointermove", hoverSector);
@@ -100,9 +193,10 @@ class DiskGraph {
     window.addEventListener("resize", invalidateBounds);
     window.addEventListener("scroll", invalidateBounds, true);
     const activate = (e) => {
-      const path = e.target.closest("path[data-node]");
-      if (path) this.activate(this.segments[+path.dataset.node].node);
+      const target = e.target.closest("[data-node]");
+      if (target) this.activate(this.segments[+target.dataset.node].node);
       else if (e.target.closest(".graphCenter")) this.up();
+      else if (this.mode === "files" && this.selected) { this.selected = null; this.highlight(null); }
     };
     $("sunburst").onclick = activate;
     $("sunburst").onkeydown = (e) => {
@@ -158,7 +252,8 @@ class DiskGraph {
     const tip = $("graphTooltip");
     if (!node || !point) { tip.hidden = true; this.tooltipNode = null; return; }
     if (this.tooltipNode !== node || !this.tooltipSize) {
-      tip.textContent = `${node.name} · ${graphSize(node.alloc)}`;
+      tip.textContent = `${node.name} · ${graphSize(node.alloc)}` +
+        (node.kind === "group" ? ` · ${node.count} 个文件` : this.mode === "files" && node.kind === "file" ? ` · ${date(node.appeared)} 出现` : "");
       tip.hidden = false;
       this.tooltipSize = { width: tip.offsetWidth, height: tip.offsetHeight };
       this.tooltipNode = node;
@@ -176,7 +271,7 @@ class DiskGraph {
       surface.ondragstart = (e) => e.preventDefault();
       surface.addEventListener("pointerdown", (e) => {
         if (e.button !== 0 || scanning || trashing || e.target.closest(".detailActions")) return;
-        const sector = e.target.closest("path[data-node]"), file = e.target.closest("[data-file]");
+        const sector = e.target.closest("[data-node]"), file = e.target.closest("[data-file]");
         const node = sector ? this.segments[+sector.dataset.node].node : file && this.segments.find((s) => s.node.path === file.dataset.file)?.node;
         if (!node || node.kind !== "file") return;
         drag = { node, x: e.clientX, y: e.clientY, moved: false };
@@ -217,12 +312,20 @@ class DiskGraph {
     $("graphDirs").setAttribute("aria-pressed", String(mode === "dirs"));
     $("graphFiles").setAttribute("aria-pressed", String(mode === "files"));
     $("graphFilters").hidden = mode !== "files";
-    $("sunburst").setAttribute("aria-label", mode === "dirs" ? "目录占用环形图" : "新出现文件占用环形图");
+    this.applyMode();
     this.refresh(this.history[mode].paths.length === 1);
+  }
+  applyMode() {
+    // 两种模式使用不同的图形：目录占用为环形层级图，新出现的文件为时间线气泡图。
+    const files = this.mode === "files";
+    $("graphView").dataset.mode = this.mode;
+    $("graphGuide").textContent = files ? "横轴为出现日期 · 圆面积表示文件大小 · 颜色区分所在目录 · 点击文件查看详情" : "悬停查看详情 · 点击目录深入 · 点击圆心返回上层";
+    $("sunburst").setAttribute("viewBox", files ? `0 0 ${timelineBox.width} ${timelineBox.height}` : "0 0 640 640");
+    $("sunburst").setAttribute("aria-label", files ? "新出现文件时间线" : "目录占用环形图");
   }
   reset() {
     this.cancelHover(); this.detailState = null;
-    ++this.request; this.data = null; this.selected = null;
+    ++this.request; this.data = null; this.selected = null; this.hoverElements = null; this.bubbleByNode = null;
     this.history = { dirs: { paths: [""], index: 0 }, files: { paths: [""], index: 0 } };
     this.collected.clear(); this.renderCollector();
     $("sunburst").innerHTML = ""; $("graphLegend").innerHTML = "";
@@ -241,9 +344,17 @@ class DiskGraph {
     if (!hasResult) return;
     const token = ++this.request, mode = this.mode, history = this.history[mode];
     let path = history.paths[history.index];
-    const fetch = (p) => api().QueryGraph(p, mode, Math.round(Math.max(1, num("fileMin", 500)) * 1e6), Math.min(36500, Math.round(num("fileDays", 60))));
+    const minMB = Math.max(1, num("fileMin", 500)), days = Math.max(1, Math.min(36500, Math.round(num("fileDays", 60))));
+    const fetch = (p) => api().QueryGraph(p, mode, Math.round(minMB * 1e6), days);
     $("graphView").setAttribute("aria-busy", "true");
     try {
+      if (mode === "files") {
+        const res = await api().QueryFiles(Math.round(minMB * 1e6), days);
+        if (token !== this.request) return;
+        this.data = Object.assign(fileTimeline(res.rows, days), { total: res.total, minMB });
+        this.selected = null; this.render();
+        return;
+      }
       let data;
       try { data = await fetch(path); }
       catch (err) {
@@ -281,50 +392,88 @@ class DiskGraph {
     if (scanning) return;
     this.cancelHover();
     if (node.kind === "dir") this.navigate(node.path);
-    else if (node.kind === "file") { this.selected = node; this.highlight(node); }
+    else if (node.kind === "file" || node.kind === "group") { this.selected = node; this.highlight(node); }
     else this.showDetail(node);
   }
   render() {
-    const root = this.data.root;
+    const root = this.data.root, files = this.mode === "files";
     this.cancelHover(); this.detailState = null; this.highlighted = null; this.highlightedRow = null;
-    this.segments = graphSegments(root);
-    this.sectorByNode = new Map(this.segments.map((s, i) => [s.node, { ...s, index: i }]));
+    this.applyMode();
+    $("sunburst").classList.remove("dim");
     $("graphEmpty").hidden = root.alloc > 0;
-    if (root.alloc <= 0) this.empty(this.mode === "files" ? "没有符合条件的新文件" : "这个目录暂无占用数据", "可以调整筛选条件或重新扫描");
-    const label = graphSize(root.alloc).split(" ");
-    $("sunburst").innerHTML = graphMarkup(this.segments) +
-      `<g class="graphCenter" tabindex="0" role="button" aria-label="返回上层目录"><circle cx="320" cy="320" r="76"/><text x="320" y="310" class="centerValue">${label[0]}</text><text x="320" y="343" class="centerUnit">${label[1]}</text><text x="320" y="369" class="centerBack">${this.data.breadcrumbs.length > 1 ? '↑ 返回上层' : '扫描目录'}</text></g>`;
-    this.hoverElements = { base: $("graphSectors"), layer: $("graphHover"), branch: $("graphHoverBranch"), outline: $("graphHoverOutline") };
+    if (root.alloc <= 0) this.empty(files ? "没有符合条件的新文件" : "这个目录暂无占用数据", files ? "可以调低大小阈值或放宽天数" : "可以重新扫描");
+    if (files) this.renderTimeline(); else this.renderSunburst();
     $("graphTitle").textContent = root.name;
     $("graphTotal").textContent = graphSize(root.alloc);
-    $("graphPath").textContent = root.path || "全部扫描目录";
-    $("graphBreadcrumbs").innerHTML = this.data.breadcrumbs.map((n) => `<button data-path="${esc(n.path)}" title="${esc(n.path || n.name)}">${esc(n.name)}</button>`).join('<span aria-hidden="true">›</span>');
     $("graphLegend").innerHTML = root.children.map((n, i) => {
-      const sector = this.sectorByNode.get(n);
-      return `<div class="legendRow ${n.kind === "other" ? 'other' : ''}" data-child="${i}" tabindex="0" role="button" aria-label="${esc(n.name)} ${graphSize(n.alloc)}" ${n.kind === "file" ? `draggable="true" data-file="${esc(n.path)}"` : ''} title="${esc(n.path || '小文件、目录元数据与合并显示的项目')}"><i style="background:${sector ? sector.color : graphOtherColor}"></i><span>${esc(n.name)}${n.kind === "dir" ? ' <b>›</b>' : ''}</span><strong>${graphSize(n.alloc)}</strong></div>`;
+      const sector = files ? n : this.sectorByNode.get(n);
+      const muted = n.kind === "other" || n.other;
+      return `<div class="legendRow ${muted ? 'other' : ''}" data-child="${i}" tabindex="0" role="button" aria-label="${esc(n.name)} ${graphSize(n.alloc)}" ${n.kind === "file" ? `draggable="true" data-file="${esc(n.path)}"` : ''} title="${esc(n.path || (files ? '文件较少的位置合并显示' : '小文件、目录元数据与合并显示的项目'))}"><i style="background:${sector && sector.color || graphOtherColor}"></i><span>${esc(n.name)}${n.kind === "dir" ? ' <b>›</b>' : n.kind === "group" ? ` <b>${n.count} 个文件</b>` : ''}</span><strong>${graphSize(n.alloc)}</strong></div>`;
     }).join("");
     this.legendByNode = new Map(Array.from($("graphLegend").children, (row, i) => [root.children[i], row]));
     this.showDetail(null); this.syncControls();
   }
+  renderSunburst() {
+    const root = this.data.root;
+    this.bubbleByNode = null;
+    this.segments = graphSegments(root);
+    this.sectorByNode = new Map(this.segments.map((s, i) => [s.node, { ...s, index: i }]));
+    const label = graphSize(root.alloc).split(" ");
+    $("sunburst").innerHTML = graphMarkup(this.segments) +
+      `<g class="graphCenter" tabindex="0" role="button" aria-label="返回上层目录"><circle cx="320" cy="320" r="76"/><text x="320" y="310" class="centerValue">${label[0]}</text><text x="320" y="343" class="centerUnit">${label[1]}</text><text x="320" y="369" class="centerBack">${this.data.breadcrumbs.length > 1 ? '↑ 返回上层' : '扫描目录'}</text></g>`;
+    this.hoverElements = { base: $("graphSectors"), layer: $("graphHover"), branch: $("graphHoverBranch"), outline: $("graphHoverOutline") };
+    $("graphPath").textContent = root.path || "全部扫描目录";
+    $("graphBreadcrumbs").innerHTML = this.data.breadcrumbs.map((n) => `<button data-path="${esc(n.path)}" title="${esc(n.path || n.name)}">${esc(n.name)}</button>`).join('<span aria-hidden="true">›</span>');
+  }
+  renderTimeline() {
+    const data = this.data, layout = timelineLayout(data);
+    this.hoverElements = null; this.sectorByNode = new Map();
+    this.segments = layout.points;
+    const svg = $("sunburst");
+    svg.innerHTML = data.files.length ? timelineMarkup(layout) : "";
+    this.bubbleByNode = new Map(); this.groupBubbles = new Map(); this.activeBubbles = [];
+    for (const el of svg.querySelectorAll(".bubble[data-node]")) {
+      const node = this.segments[+el.dataset.node].node;
+      this.bubbleByNode.set(node, el);
+      if (!this.groupBubbles.has(node.group)) this.groupBubbles.set(node.group, []);
+      this.groupBubbles.get(node.group).push(el);
+    }
+    const total = Math.max(data.total || 0, data.files.length), shown = layout.points.length;
+    $("graphPath").textContent = `最近 ${data.days} 天 · 单个至少 ${data.minMB} MB · ${total.toLocaleString()} 个文件` +
+      (shown < total ? `，图中显示其中最大的 ${shown} 个` : "");
+    $("graphBreadcrumbs").innerHTML = "";
+  }
   highlight(node) {
-    if (!this.hoverElements || !this.data) return;
+    if (!this.data || !(this.hoverElements || this.bubbleByNode)) return;
     if (this.highlighted !== node) {
-      const active = node && node.kind !== "other" ? this.sectorByNode.get(node) : null;
-      const { base, layer, branch, outline } = this.hoverElements;
-      if (active) {
-        base.setAttribute("opacity", ".22");
-        branch.setAttribute("href", `#graphBranch${active.index}`);
-        outline.setAttribute("d", active.d);
-        layer.removeAttribute("display");
-      } else {
-        base.removeAttribute("opacity"); layer.setAttribute("display", "none");
-      }
+      const row = this.bubbleByNode ? this.highlightBubbles(node) : this.highlightSectors(node);
       if (this.highlightedRow) this.highlightedRow.classList.remove("highlight");
-      this.highlightedRow = active ? this.legendByNode.get(node) : null;
+      this.highlightedRow = row || null;
       if (this.highlightedRow) this.highlightedRow.classList.add("highlight");
       this.highlighted = node;
     }
     this.showDetail(node || this.selected);
+  }
+  highlightSectors(node) {
+    const active = node && node.kind !== "other" ? this.sectorByNode.get(node) : null;
+    const { base, layer, branch, outline } = this.hoverElements;
+    if (active) {
+      base.setAttribute("opacity", ".22");
+      branch.setAttribute("href", `#graphBranch${active.index}`);
+      outline.setAttribute("d", active.d);
+      layer.removeAttribute("display");
+    } else {
+      base.removeAttribute("opacity"); layer.setAttribute("display", "none");
+    }
+    return active ? this.legendByNode.get(node) : null;
+  }
+  highlightBubbles(node) {
+    for (const el of this.activeBubbles) el.classList.remove("on");
+    const group = node && (node.kind === "group" ? node : node.group);
+    this.activeBubbles = !node ? [] : node.kind === "group" ? this.groupBubbles.get(node) || [] : [this.bubbleByNode.get(node)].filter(Boolean);
+    for (const el of this.activeBubbles) el.classList.add("on");
+    $("sunburst").classList.toggle("dim", this.activeBubbles.length > 0);
+    return group ? this.legendByNode.get(group) : null;
   }
   showDetail(node) {
     const pinned = this.selected === node;
@@ -332,11 +481,17 @@ class DiskGraph {
     if (previous && previous.node === node && previous.pinned === pinned && previous.root === this.data?.root && previous.mode === this.mode) return;
     this.detailState = { node, pinned, root: this.data?.root, mode: this.mode };
     if (!node) {
-      $("graphDetail").innerHTML = `<p>${this.mode === "files" ? '仅显示符合大小和出现日期筛选的文件。' : '扇区宽度表示占用大小，从内到外表示目录层级。'}</p><p>颜色沿色环按位置渐变，同一分支色调相近；深灰为合并的小项目。点击文件查看日期、定位或加入待删除。</p>`;
+      $("graphDetail").innerHTML = this.mode === "files"
+        ? '<p>横轴是文件出现日期，越靠右越新；圆面积表示文件大小，颜色区分所在目录。</p><p>点击文件查看日期、定位或加入待删除，也可直接拖到下方待删除区；点击右侧目录可高亮其中的文件。</p>'
+        : '<p>扇区宽度表示占用大小，从内到外表示目录层级。</p><p>颜色沿色环按位置渐变，同一分支色调相近；深灰为合并的小项目。点击文件查看日期、定位或加入待删除。</p>';
       return;
     }
     const percent = this.data.root.alloc ? (node.alloc / this.data.root.alloc * 100).toFixed(1) : "0.0";
     const files = node.kind === "file";
+    if (node.kind === "group") {
+      $("graphDetail").innerHTML = `<div><h3>${esc(node.name)}</h3><p class="detailPath">${esc(node.path || '多个目录')}</p><div class="detailSize">${graphSize(node.alloc)} <span>${percent}%</span></div><p>${node.count} 个新出现的文件</p></div>${pinned && node.path ? `<div class="detailActions"><button data-reveal="${esc(node.path)}">定位目录</button></div>` : `<p>${node.path ? '点击可固定高亮并定位该目录。' : '文件较少的目录合并于此。'}</p>`}`;
+      return;
+    }
     $("graphDetail").innerHTML = `<div ${files ? `draggable="true" data-file="${esc(node.path)}"` : ''}><h3>${esc(node.name)}</h3><p class="detailPath">${esc(node.path)}</p><div class="detailSize">${graphSize(node.alloc)} <span>${percent}%</span></div>${differs(node.alloc, node.logical) && node.kind !== 'other' ? `<p>逻辑大小 ${graphSize(node.logical)}</p>` : ''}${files ? `<p>出现日期 ${date(node.appeared)}${node.appearedIsMtime ? '（修改时间）' : ''}<br>修改日期 ${date(node.modified)}</p>` : ''}</div>${this.selected === node && files ? `<div class="detailActions"><button data-reveal="${esc(node.path)}">定位</button><button data-collect="true" ${scanning || trashing ? 'disabled' : ''}>加入待删除</button><button class="trash" data-path="${esc(node.path)}">删除</button></div>` : `<p>${files ? '点击文件可定位、加入待删除，或拖到下方待删除区。' : node.kind === 'dir' ? '点击进入此目录，查看下一层。' : '小文件、目录元数据及超过显示数量的项目合并于此。'}</p>`}`;
     for (const button of $("graphDetail").querySelectorAll("button.trash")) button.disabled = scanning || trashing;
   }
@@ -380,4 +535,4 @@ class DiskGraph {
   }
 }
 
-if (typeof module !== "undefined" && module.exports) module.exports = { graphSize, sectorPath, graphSegments, graphMarkup, graphColor, graphOtherColor, DiskGraph };
+if (typeof module !== "undefined" && module.exports) module.exports = { graphSize, sectorPath, graphSegments, graphMarkup, graphColor, graphOtherColor, fileTimeline, timelineLayout, timelineMarkup, timelineBox, DiskGraph };
