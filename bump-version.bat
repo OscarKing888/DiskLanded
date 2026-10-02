@@ -1,3 +1,5 @@
+:: .\bump-version.bat 0.1.1 --notes "更新说明"
+
 @echo off
 setlocal EnableExtensions
 cd /d "%~dp0"

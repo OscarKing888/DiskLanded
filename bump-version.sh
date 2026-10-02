@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# ./bump-version.sh 0.1.1 --notes "更新说明"
 set -euo pipefail
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd -- "$script_dir"
