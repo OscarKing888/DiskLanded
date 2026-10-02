@@ -94,7 +94,11 @@ DiskLanded 仓库级 Git 协议。完整规则只在本文件维护；`AGENTS.md
 - 用户直接运行 `bump-version.sh` / `.bat` 的版本制作工具是独立任务分支规则的例外：按用户
   约定，版本修改、提交和 Tag 始终在检出 `main` 的 worktree 执行，不创建临时分支或 worktree，
   不切换调用方分支；只提交 `VERSION` 和 `CHANGELOG.md`，并使用同一仓库级锁串行执行。
-  对该工具本身的代码修改仍遵守正常的会话独立 worktree 与任务分支流程。
+  `scripts/bump-version.js` 只校验并更新版本文件，提交、Tag 和推送由这两个入口脚本直接用 Git
+  命令完成。按用户约定，该工具默认用 `git push --atomic origin main v<VERSION>` 推送 `main`
+  与本次 Tag（`--no-push` 跳过），这是「本地会话不自动 push」的例外，仅限用户亲自运行该工具；
+  agent 不得代为运行它来推送。对该工具本身的代码修改仍遵守正常的会话独立 worktree 与任务
+  分支流程。
 
 ## 合并后：自动清理本地临时资源
 

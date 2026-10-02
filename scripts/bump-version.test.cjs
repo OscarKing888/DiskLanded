@@ -28,9 +28,10 @@ function git(root, ...args) {
   return result.stdout.trim();
 }
 function fixture(t, repository = true, changelog = '# Changelog\n\n## [Unreleased]\n\n## [0.1] - 2026-09-01\n\n- Initial.\n') {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'disklanded bump 中文 '));
-  t.after(() => removeFixture(root));
-  fs.mkdirSync(path.join(root, 'scripts'));
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'disklanded bump 中文 '));
+  t.after(() => removeFixture(base));
+  const root = path.join(base, 'repo 中文');
+  fs.mkdirSync(path.join(root, 'scripts'), { recursive: true });
   for (const file of ['bump-version.js', 'version.js']) fs.copyFileSync(path.join(__dirname, file), path.join(root, 'scripts', file));
   fs.copyFileSync(path.join(__dirname, '../bump-version.sh'), path.join(root, 'bump-version.sh'));
   fs.writeFileSync(path.join(root, 'VERSION'), '0.1\n');
@@ -39,17 +40,33 @@ function fixture(t, repository = true, changelog = '# Changelog\n\n## [Unrelease
   fs.writeFileSync(path.join(root, 'unrelated.txt'), 'original\n');
   if (repository) {
     git(root, '-c', 'init.defaultBranch=main', 'init');
-    git(root, 'config', 'user.name', 'Version Test');
-    git(root, 'config', 'user.email', 'version-test@example.invalid');
-    git(root, 'config', 'commit.gpgsign', 'false');
-    git(root, 'config', 'tag.gpgsign', 'false');
-    git(root, 'config', 'core.hooksPath', path.join(root, 'no-hooks'));
+    configure(root);
     git(root, 'add', '.');
     git(root, 'commit', '-m', 'Initial fixture');
+    // 本地裸仓库充当 origin，验证脚本推送 main 与版本 Tag。
+    git(base, '-c', 'init.defaultBranch=main', 'init', '--bare', 'origin.git');
+    git(root, 'remote', 'add', 'origin', path.join(base, 'origin.git'));
+    git(root, 'push', '-q', 'origin', 'main');
   }
   return root;
 }
+function configure(root) {
+  git(root, 'config', 'user.name', 'Version Test');
+  git(root, 'config', 'user.email', 'version-test@example.invalid');
+  git(root, 'config', 'commit.gpgsign', 'false');
+  git(root, 'config', 'tag.gpgsign', 'false');
+  git(root, 'config', 'core.hooksPath', path.join(root, 'no-hooks'));
+}
+function origin(root) { return path.join(path.dirname(root), 'origin.git'); }
+function remoteRef(root, ref) {
+  const result = command('git', ['rev-parse', '-q', '--verify', ref], origin(root));
+  return result.status === 0 ? result.stdout.trim() : '';
+}
+// 提交、Tag 和推送由入口脚本完成，因此端到端行为都经过 bump-version.sh。
 function bump(root, version, ...options) {
+  return command('bash', [path.join(root, 'bump-version.sh'), version, '--date', '2026-10-02', ...options], root);
+}
+function prepare(root, version, ...options) {
   return command(process.execPath, [path.join(root, 'scripts/bump-version.js'), version, '--date', '2026-10-02', ...options], root);
 }
 function success(result) { assert.equal(result.status, 0, result.stderr || result.stdout); }
@@ -65,6 +82,8 @@ test('first release succeeds through the shell entry point with one final newlin
     git(root, 'show', '--format=', '--check', 'HEAD');
     assert.equal(git(root, 'status', '--porcelain'), '');
     assert.equal(git(root, 'rev-parse', 'v0.1.1^{commit}'), git(root, 'rev-parse', 'main'));
+    assert.equal(remoteRef(root, 'refs/heads/main'), git(root, 'rev-parse', 'main'));
+    assert.equal(remoteRef(root, 'refs/tags/v0.1.1'), git(root, 'rev-parse', 'refs/tags/v0.1.1'));
     const head = git(root, 'rev-parse', 'main');
     success(bump(root, '0.1.1'));
     assert.equal(git(root, 'rev-parse', 'main'), head);
@@ -178,9 +197,12 @@ test('--no-tag commits; retry adds the missing tag without another commit', t =>
   success(bump(root, '0.2', '--no-tag'));
   assert.equal(git(root, 'tag', '--list', 'v0.2'), '');
   const head = git(root, 'rev-parse', 'HEAD');
+  assert.equal(remoteRef(root, 'refs/heads/main'), head);
+  assert.equal(remoteRef(root, 'refs/tags/v0.2'), '');
   success(bump(root, '0.2'));
   assert.equal(git(root, 'rev-parse', 'HEAD'), head);
   assert.equal(git(root, 'rev-parse', 'v0.2^{commit}'), head);
+  assert.equal(remoteRef(root, 'refs/tags/v0.2'), git(root, 'rev-parse', 'refs/tags/v0.2'));
 });
 
 test('--no-commit only updates main files and rejects source archives without Git', t => {
@@ -189,10 +211,13 @@ test('--no-commit only updates main files and rejects source archives without Gi
   assert.equal(fs.readFileSync(path.join(root, 'VERSION'), 'utf8'), '0.1.1\n');
   assert.equal(git(root, 'rev-parse', 'HEAD'), head);
   assert.equal(git(root, 'tag', '--list'), '');
+  assert.equal(remoteRef(root, 'refs/heads/main'), head);
   const archive = fixture(t, false), before = snapshot(archive);
   assert.equal(bump(archive, '0.2').status, 1);
   assert.deepEqual(snapshot(archive), before);
   assert.equal(bump(archive, '0.2', '--no-commit').status, 1);
+  assert.deepEqual(snapshot(archive), before);
+  assert.equal(prepare(archive, '0.2', '--no-commit').status, 1);
   assert.deepEqual(snapshot(archive), before);
 });
 
@@ -301,4 +326,67 @@ test('tag signing failure keeps the main commit and allows a safe retry', t => {
   success(bump(root, '0.1.1'));
   assert.equal(git(root, 'rev-parse', 'HEAD'), head);
   assert.equal(git(root, 'rev-parse', 'v0.1.1^{commit}'), head);
+});
+
+test('the plan on stdout drives the entry script; messages stay on stderr', t => {
+  const root = fixture(t);
+  const result = prepare(root, '0.1.1', '--no-push');
+  success(result);
+  assert.deepEqual(result.stdout.trim().split('\n'), [
+    `root=${fs.realpathSync(root)}`, 'version=0.1.1', 'commit=1', 'create_tag=1', 'push=0', 'push_tag=0',
+  ]);
+  assert.match(result.stderr, /Updated VERSION 0\.1 -> 0\.1\.1/);
+  assert.equal(git(root, 'log', '-1', '--format=%s'), 'Initial fixture');
+  assert.equal(git(root, 'tag', '--list'), '');
+});
+
+test('--no-push commits and tags locally; a later run pushes main and the tag together', t => {
+  const root = fixture(t), remoteHead = remoteRef(root, 'refs/heads/main');
+  success(bump(root, '0.1.1', '--no-push'));
+  assert.equal(git(root, 'rev-parse', 'v0.1.1^{commit}'), git(root, 'rev-parse', 'main'));
+  assert.equal(remoteRef(root, 'refs/heads/main'), remoteHead);
+  assert.equal(remoteRef(root, 'refs/tags/v0.1.1'), '');
+  const head = git(root, 'rev-parse', 'main');
+  success(bump(root, '0.1.1'));
+  assert.equal(git(root, 'rev-parse', 'main'), head);
+  assert.equal(remoteRef(root, 'refs/heads/main'), head);
+  assert.equal(remoteRef(root, 'refs/tags/v0.1.1'), git(root, 'rev-parse', 'refs/tags/v0.1.1'));
+});
+
+test('a rejected push keeps the local commit and tag, updates nothing remotely, and can be retried', t => {
+  const root = fixture(t);
+  const other = path.join(path.dirname(root), 'other clone');
+  git(path.dirname(root), 'clone', '-q', origin(root), other);
+  configure(other);
+  fs.writeFileSync(path.join(other, 'unrelated.txt'), 'remote change\n');
+  git(other, 'commit', '-qam', 'Remote change');
+  git(other, 'push', '-q', 'origin', 'main');
+  const remoteHead = remoteRef(root, 'refs/heads/main');
+
+  const result = bump(root, '0.1.1');
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /commit and tag were kept, but pushing to origin failed/);
+  assert.equal(git(root, 'log', '-1', '--format=%s'), 'chore: bump version to 0.1.1');
+  assert.equal(git(root, 'rev-parse', 'v0.1.1^{commit}'), git(root, 'rev-parse', 'main'));
+  assert.equal(remoteRef(root, 'refs/heads/main'), remoteHead);
+  assert.equal(remoteRef(root, 'refs/tags/v0.1.1'), '');
+  assert.equal(fs.existsSync(path.join(root, '.git/disklanded-main-merge.lock')), false);
+
+  git(root, 'pull', '-q', '--no-rebase', '--no-edit', 'origin', 'main');
+  success(bump(root, '0.1.1'));
+  assert.equal(remoteRef(root, 'refs/heads/main'), git(root, 'rev-parse', 'main'));
+  assert.equal(remoteRef(root, 'refs/tags/v0.1.1'), git(root, 'rev-parse', 'refs/tags/v0.1.1'));
+});
+
+test('an occupied main merge lock stops before any version change', { timeout: 60000 }, t => {
+  const root = fixture(t), before = snapshot(root), head = git(root, 'rev-parse', 'main');
+  const lock = path.join(root, '.git/disklanded-main-merge.lock');
+  fs.mkdirSync(lock);
+  const result = bump(root, '0.1.1');
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /lock is occupied/);
+  assert.deepEqual(snapshot(root), before);
+  assert.equal(git(root, 'rev-parse', 'main'), head);
+  assert.equal(fs.existsSync(lock), true);
+  fs.rmdirSync(lock);
 });

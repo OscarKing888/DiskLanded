@@ -99,17 +99,22 @@ Node.js 22 或更新版本及 Git。可从任意分支的 worktree 运行，脚�
 .\bump-version.bat 0.1.1 --notes "本次版本的更新说明"
 ```
 
-脚本直接在 `main` 的 worktree 更新 `VERSION` 和 `CHANGELOG.md`，只提交这两个文件，
-然后在该 `main` 提交上创建附注 Tag `v0.1.1`。不创建临时分支或 worktree，所有操作使用
-仓库级锁串行执行。它保留调用方的分支和改动，以及 `main` 上无关的暂存或未提交内容；自动
-提交时，版本文件有未提交修改会停止。已有 Tag 不会被覆盖。格式检查失败会显示具体文件和行号；
-Git 提交失败会显示 Git 的实际错误。两种失败都会保留 `main` 上的版本文件修改，修正错误并
-检查这两个文件后，可加 `--resume` 继续提交。Tag 创建失败保留版本提交，修复后可用同一版本重试。
+`scripts/bump-version.js` 校验参数和仓库状态，直接在 `main` 的 worktree 更新 `VERSION` 和
+`CHANGELOG.md`；`bump-version.sh` / `.bat` 随后直接用 Git 命令只提交这两个文件，在该 `main`
+提交上创建附注 Tag `v0.1.1`，再用 `git push --atomic origin main v0.1.1` 一起推送 `main`
+和 Tag（两者要么都成功，要么远端都不变）。不创建临时分支或 worktree，所有操作使用仓库级锁
+串行执行。它保留调用方的分支和改动，以及 `main` 上无关的暂存或未提交内容；自动提交时，
+版本文件有未提交修改会停止。已有 Tag 不会被覆盖。格式检查失败会显示具体文件和行号；Git
+提交失败会显示 Git 的实际错误。两种失败都会保留 `main` 上的版本文件修改，修正错误并检查
+这两个文件后，可加 `--resume` 继续提交。Tag 创建失败保留版本提交，修复后可用同一版本重试。
+推送失败（例如远端 `main` 有新提交）保留本地提交和 Tag；把 `origin/main` 合入 `main` 后，
+用同一版本重新运行即可推送，不会再次提交或改动 Tag。
 
 - `--notes` 可重复使用；`--date YYYY-MM-DD` 指定更新记录日期。
-- `--no-tag` 在 `main` 提交版本变更，不创建 Tag。
-- `--no-commit` 同样只修改 `main` worktree 的版本文件，不提交或打 Tag；不支持无 Git 仓库的
-  源码压缩包。检查并验证后可用 `--resume` 完成提交和 Tag。
+- `--no-tag` 在 `main` 提交版本变更并推送 `main`，不创建或推送 Tag。
+- `--no-push` 只在本地提交并打 Tag，不推送；之后用同一版本不带该参数重新运行即可推送。
+- `--no-commit` 同样只修改 `main` worktree 的版本文件，不提交、打 Tag 或推送；不支持无 Git
+  仓库的源码压缩包。检查并验证后可用 `--resume` 完成提交、Tag 和推送。
 - `--resume` 继续当前未完成的版本制作，要求 `VERSION` 和已有 CHANGELOG 版本标题均匹配
   指定版本；保留现有说明并修正文件末尾多余空行。不能与 `--notes` 或 `--no-commit` 合用，
   不会覆盖已有 Tag 或夹带其他暂存文件。版本不能低于 `main` 已提交的版本。
@@ -121,11 +126,8 @@ Git 提交失败会显示 Git 的实际错误。两种失败都会保留 `main` 
 # Windows：.\bump-version.bat 0.1.1 --resume
 ```
 
-脚本不自动推送。检查更新说明并完成本地构建验证后，推送对应版本：
-
-```sh
-git push origin main v0.1.1
-```
+推送版本 Tag 会触发 CI 发布，运行前请先检查更新说明并完成本地构建验证；需要先在本地检查
+提交时使用 `--no-push`。
 
 `.github/workflows/build.yml` 只在推送 `v*` Tag 或手动触发时运行。CI 校验 Tag 等于
 `v` + `VERSION`，执行脚本和前端测试，再在三种系统上执行 Go 测试、构建及启动检查。
