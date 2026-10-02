@@ -6,7 +6,7 @@
 <title>新占 DiskLanded</title>
 <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body data-view="graph">
 <header class="top">
   <div class="brand"><span class="logo">新占</span><span id="version" class="version" title="版本"></span><span class="sub">DiskLanded · 空间被谁占着，哪些大文件是新来的</span></div>
   <div class="roots">
@@ -23,11 +23,59 @@
 </header>
 
 <main>
-  <section>
-    <h2>卷概览</h2>
+  <details id="volumeSection" class="volumeSection">
+    <summary>卷概览 <span id="volumeSummary"></span></summary>
     <div id="volumes" class="volumes"></div>
+  </details>
+
+  <div class="resultTabs" role="tablist" aria-label="结果显示方式">
+    <button id="graphTab" role="tab" aria-selected="true" aria-controls="graphView" class="active" tabindex="0">图形视图</button>
+    <button id="listTab" role="tab" aria-selected="false" aria-controls="listView" tabindex="-1">列表视图</button>
+    <span>同一份扫描结果，两种查看方式</span>
+  </div>
+
+  <section id="graphView" role="tabpanel" aria-labelledby="graphTab">
+    <div class="graphPanel">
+      <div class="graphToolbar">
+        <div class="graphModes" role="group" aria-label="图形内容">
+          <button id="graphDirs" class="active" aria-pressed="true">目录占用</button>
+          <button id="graphFiles" aria-pressed="false">新出现的文件</button>
+        </div>
+        <div id="graphFilters" class="graphFilters" hidden>
+          <label>至少 <input id="graphFileMin" type="number" min="1" value="500"> MB</label>
+          <label>最近 <input id="graphFileDays" type="number" min="1" value="60"> 天</label>
+        </div>
+      </div>
+      <div class="graphNavigation">
+        <button id="graphBack" title="后退" aria-label="后退" disabled>‹</button>
+        <button id="graphForward" title="前进" aria-label="前进" disabled>›</button>
+        <nav id="graphBreadcrumbs" aria-label="当前目录"><span>扫描目录</span></nav>
+      </div>
+      <div class="graphWorkspace">
+        <div class="graphCanvas">
+          <svg id="sunburst" viewBox="0 0 640 640" role="group" aria-label="目录占用环形图"></svg>
+          <div id="graphEmpty" class="graphEmpty"><strong>看清每一份空间</strong><span>添加目录并扫描，即可查看占用分布</span></div>
+          <div id="graphTooltip" class="graphTooltip" hidden></div>
+          <p class="graphGuide">悬停查看详情 · 点击目录深入 · 点击圆心返回上层</p>
+        </div>
+        <aside class="graphSidebar" aria-label="图形明细">
+          <div class="graphHeading"><h2 id="graphTitle">扫描目录</h2><strong id="graphTotal">—</strong></div>
+          <p id="graphPath" class="graphPath">扫描后显示目录和文件明细</p>
+          <div id="graphLegend" class="graphLegend"></div>
+          <div id="graphDetail" class="graphDetail"><p>彩色扇区表示目录层级，扇区越宽，占用越大。</p><p>从左侧图形或这里的明细逐层浏览。</p></div>
+        </aside>
+      </div>
+      <div id="collector" class="collector" aria-label="待删除文件区">
+        <div class="collectorMark" aria-hidden="true">◎</div>
+        <div class="collectorSummary"><strong id="collectorCount">待删除文件</strong><span id="collectorHint">将文件拖到这里，或在详情中加入待删除</span></div>
+        <button id="collectorClear" class="ghost" disabled>清空待选</button>
+        <button id="collectorTrash" class="danger" disabled>移入回收站</button>
+        <div id="collectorItems" class="collectorItems"></div>
+      </div>
+    </div>
   </section>
 
+  <div id="listView" role="tabpanel" aria-labelledby="listTab" hidden>
   <section>
     <div class="secHead">
       <h2>大目录</h2>
@@ -40,7 +88,6 @@
         <tbody id="dirBody"><tr><td colspan="2" class="empty">扫描后显示</td></tr></tbody>
       </table>
     </div>
-    <p id="scanHint" class="hint" hidden>文件已移入回收站。目录占用为扫描时的结果，请重新扫描以更新。</p>
   </section>
 
   <section>
@@ -58,6 +105,9 @@
     </div>
   </section>
 
+  </div>
+  <p id="scanHint" class="hint" hidden>文件已移入回收站。目录占用为扫描时的结果，请重新扫描以更新。</p>
+
   <section id="failSec" hidden>
     <details>
       <summary id="failSummary"></summary>
@@ -66,6 +116,7 @@
   </section>
 </main>
 <div id="toast" class="toast" hidden></div>
+<script src="graph.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

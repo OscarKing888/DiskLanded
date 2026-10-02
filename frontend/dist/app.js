@@ -7,6 +7,29 @@ let scanning = false;
 let hasResult = false;
 let trashing = false;
 let fileQueryID = 0;
+const graph = new DiskGraph();
+
+function setResultView(view) {
+  document.body.dataset.view = view;
+  $("volumeSection").open = view === "list";
+  for (const mode of ["graph", "list"]) {
+    const active = mode === view, tab = $(mode + "Tab");
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
+    $(mode + "View").hidden = !active;
+  }
+}
+for (const mode of ["graph", "list"]) {
+  $(mode + "Tab").onclick = () => setResultView(mode);
+  $(mode + "Tab").onkeydown = (e) => {
+    if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) {
+      e.preventDefault();
+      const next = e.key === "Home" ? "graph" : e.key === "End" ? "list" : mode === "graph" ? "list" : "graph";
+      setResultView(next); $(next + "Tab").focus();
+    }
+  };
+}
 
 // ---------- formatting ----------
 function gb(b) { return (b / 1e9).toFixed(1) + " GB"; }
@@ -59,6 +82,7 @@ $("browseBtn").onclick = async () => {
 // ---------- volumes ----------
 async function refreshVolumes() {
   const res = await api().Volumes(roots);
+  $("volumeSummary").textContent = res.volumes.map((v) => `${v.mount} · 已用 ${v.percent.toFixed(1)}% · 可用 ${gb(v.free)}`).join("　") || "请添加扫描目录";
   const cards = res.volumes.map((v) => `
     <div class="vol">
       <div class="mount" title="${esc(v.roots.join("\n"))}">${esc(v.mount)}</div>
@@ -83,14 +107,17 @@ function setScanning(on) {
 function updateTrashButtons() {
   for (const button of document.querySelectorAll("button.trash")) button.disabled = scanning || trashing;
   $("scanBtn").disabled = trashing;
+  graph.syncControls();
 }
 $("scanBtn").onclick = async () => {
   if (!roots.length) { toast("请先添加要扫描的目录"); return; }
+  const previousResult = hasResult;
   try {
     setScanning(true);
+    hasResult = false; ++fileQueryID; graph.reset();
     $("status").textContent = "正在准备扫描…";
     await api().StartScan(roots);
-  } catch (e) { setScanning(false); $("status").textContent = String(e); }
+  } catch (e) { hasResult = previousResult; setScanning(false); $("status").textContent = String(e); graph.refresh(true); }
 };
 $("cancelBtn").onclick = () => { $("status").textContent = "正在取消…"; api().CancelScan(); };
 
@@ -116,6 +143,7 @@ function onDone(s) {
   }
   refreshVolumes();
   queryDirs(); queryFiles();
+  graph.refresh(true);
 }
 
 // ---------- tables ----------
@@ -135,7 +163,7 @@ async function queryFiles() {
   const queryID = ++fileQueryID;
   const floorMB = 1;
   const mb = Math.max(floorMB, num("fileMin", 500));
-  const res = await api().QueryFiles(Math.round(mb * 1e6), Math.round(num("fileDays", 60)));
+  const res = await api().QueryFiles(Math.round(mb * 1e6), Math.min(36500, Math.round(num("fileDays", 60))));
   // 删除或修改筛选条件后，忽略旧请求，避免已删除的文件重新出现在列表。
   if (queryID !== fileQueryID) return;
   $("fileCount").textContent = countText(res.total, res.rows.length);
@@ -161,11 +189,13 @@ async function trashFile(button) {
     updateTrashButtons();
     return;
   }
-  button.closest("tr").remove();
+  const row = button.closest("tr");
+  if (row) row.remove();
+  graph.removeCollected(button.dataset.path);
   $("scanHint").hidden = false;
   toast("已移入回收站，可在系统回收站恢复");
   try {
-    await Promise.all([queryFiles(), refreshVolumes()]);
+    await Promise.all([queryFiles(), refreshVolumes(), graph.refresh()]);
   } catch (err) {
     toast("文件已移入回收站，刷新失败，请重新扫描：" + String(err));
   } finally {
@@ -175,8 +205,14 @@ async function trashFile(button) {
 }
 function debounce(fn, ms) { let t; return () => { clearTimeout(t); t = setTimeout(fn, ms); }; }
 $("dirMin").addEventListener("input", debounce(queryDirs, 200));
-$("fileMin").addEventListener("input", debounce(queryFiles, 200));
-$("fileDays").addEventListener("input", debounce(queryFiles, 200));
+for (const [list, visual] of [["fileMin", "graphFileMin"], ["fileDays", "graphFileDays"]]) {
+  for (const [source, target] of [[list, visual], [visual, list]]) {
+    $(source).addEventListener("input", debounce(() => {
+      $(target).value = $(source).value;
+      queryFiles(); if (graph.mode === "files") graph.refresh();
+    }, 200));
+  }
+}
 
 document.addEventListener("click", async (e) => {
   const button = e.target.closest("button.trash");
