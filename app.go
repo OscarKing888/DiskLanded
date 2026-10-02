@@ -9,6 +9,7 @@ import (
 
 	"disklanded/internal/reveal"
 	"disklanded/internal/scan"
+	"disklanded/internal/scancache"
 	"disklanded/internal/trash"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -20,15 +21,61 @@ const maxRows = 2000
 type App struct {
 	ctx context.Context
 
-	mu      sync.Mutex
-	cancel  context.CancelFunc
-	result  *scan.Result
-	skipped []scan.Failure // roots that could not be scanned
+	mu         sync.Mutex
+	cancel     context.CancelFunc
+	result     *scan.Result
+	skipped    []scan.Failure // roots that could not be scanned
+	cachePath  string
+	cacheError string
+	restored   bool
 }
 
 func NewApp() *App { return &App{} }
 
-func (a *App) startup(ctx context.Context) { a.ctx = ctx }
+func (a *App) startup(ctx context.Context) {
+	a.ctx = ctx
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cachePath == "" {
+		path, err := scancache.DefaultPath()
+		if err != nil {
+			a.cacheError = "无法使用扫描缓存：" + err.Error()
+			return
+		}
+		a.cachePath = path
+	}
+	snapshot, err := scancache.Load(a.cachePath)
+	if err != nil {
+		a.cacheError = "无法加载上次扫描结果，请重新扫描：" + err.Error()
+		return
+	}
+	if snapshot != nil {
+		a.result, a.skipped = snapshot.Result, snapshot.Skipped
+		a.restored = true
+	}
+}
+
+// 调用时持有 mu，保证扫描与回收操作按顺序更新缓存。
+func (a *App) saveCacheLocked() {
+	if a.cachePath == "" {
+		return
+	}
+	if err := scancache.Save(a.cachePath, a.result, a.skipped); err != nil {
+		a.cacheError = "扫描结果缓存失败：" + err.Error()
+	} else {
+		a.cacheError = ""
+	}
+}
+
+func (a *App) finishScan(res *scan.Result) Summary {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.result = res
+	a.restored = false
+	a.saveCacheLocked()
+	a.cancel = nil
+	return a.summaryLocked()
+}
 
 // Version is the app version from the VERSION file, e.g. "0.1".
 func (a *App) Version() string { return appVersion }
@@ -92,12 +139,9 @@ func (a *App) StartScan(roots []string) error {
 	}()
 	go func() {
 		res := s.Run(ctx, keep)
-		a.mu.Lock()
-		a.result = res
-		a.cancel = nil
-		a.mu.Unlock()
+		summary := a.finishScan(res)
 		cancel()
-		runtime.EventsEmit(a.ctx, "scan:done", a.Summary())
+		runtime.EventsEmit(a.ctx, "scan:done", summary)
 	}()
 	return nil
 }
@@ -120,14 +164,21 @@ type Summary struct {
 	Canceled     bool             `json:"canceled"`
 	Seconds      float64          `json:"seconds"`
 	FileFloor    int64            `json:"fileFloor"`
+	Restored     bool             `json:"restored"`
+	Started      time.Time        `json:"started"`
+	CacheError   string           `json:"cacheError"`
 }
 
 func (a *App) Summary() Summary {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.summaryLocked()
+}
+
+func (a *App) summaryLocked() Summary {
 	r := a.result
 	if r == nil {
-		return Summary{FileFloor: scan.FileFloor}
+		return Summary{FileFloor: scan.FileFloor, CacheError: a.cacheError}
 	}
 	failed := r.Failed + int64(len(a.skipped))
 	samples := append(append([]scan.Failure{}, a.skipped...), r.FailSamples...)
@@ -142,6 +193,7 @@ func (a *App) Summary() Summary {
 		HasResult: true, Roots: r.Roots, Walked: r.Walked, Failed: failed,
 		FailByReason: by, FailSamples: samples, Canceled: r.Canceled,
 		Seconds: r.Duration.Seconds(), FileFloor: scan.FileFloor,
+		Restored: a.restored, Started: r.Started, CacheError: a.cacheError,
 	}
 }
 
@@ -224,5 +276,6 @@ func (a *App) trashFile(path string, move func(string) error) error {
 		}
 	}
 	a.result = &next
+	a.saveCacheLocked()
 	return nil
 }

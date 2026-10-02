@@ -102,7 +102,8 @@ function onProgress(p) {
 function onDone(s) {
   setScanning(false);
   hasResult = s.hasResult;
-  const head = s.canceled ? "扫描已取消（结果不完整）" : "扫描完成";
+  let head = s.canceled ? "扫描已取消（结果不完整）" : "扫描完成";
+  if (s.restored) head = `已加载上次扫描结果（${new Date(s.started).toLocaleString("zh-CN")}）${s.canceled ? "，结果不完整" : ""}`;
   $("status").textContent = `${head}：共走过 ${s.walked.toLocaleString()} 个文件，失败 ${s.failed.toLocaleString()} 个，用时 ${s.seconds.toFixed(1)} 秒。`;
   $("status").title = "";
   $("scanHint").hidden = true;
@@ -114,8 +115,8 @@ function onDone(s) {
       (s.failSamples.length < s.failed ? `，下面列出前 ${s.failSamples.length} 个` : "");
     $("failList").innerHTML = s.failSamples.map((f) => `<li><span>${esc(f.reason)}</span>${esc(f.path)}</li>`).join("");
   }
-  refreshVolumes();
-  queryDirs(); queryFiles();
+  if (s.cacheError) toast(s.cacheError);
+  return Promise.all([refreshVolumes(), queryDirs(), queryFiles()]);
 }
 
 // ---------- tables ----------
@@ -166,6 +167,8 @@ async function trashFile(button) {
   toast("已移入回收站，可在系统回收站恢复");
   try {
     await Promise.all([queryFiles(), refreshVolumes()]);
+    const summary = await api().Summary();
+    if (summary.cacheError) toast("文件已移入回收站，但" + summary.cacheError);
   } catch (err) {
     toast("文件已移入回收站，刷新失败，请重新扫描：" + String(err));
   } finally {
@@ -190,8 +193,20 @@ document.addEventListener("click", async (e) => {
 // ---------- init ----------
 window.addEventListener("DOMContentLoaded", async () => {
   window.runtime.EventsOn("scan:progress", onProgress);
-  window.runtime.EventsOn("scan:done", onDone);
+  window.runtime.EventsOn("scan:done", (s) => {
+    onDone(s).catch((err) => toast("刷新扫描结果失败：" + String(err)));
+  });
   $("version").textContent = "v" + (await api().Version());
-  roots = await api().DefaultRoots();
-  renderRoots();
+  $("scanBtn").disabled = true;
+  try {
+    const summary = await api().Summary();
+    roots = summary.hasResult ? summary.roots : await api().DefaultRoots();
+    renderRoots();
+    if (summary.hasResult) await onDone(summary);
+    else if (summary.cacheError) toast(summary.cacheError);
+  } catch (err) {
+    toast("加载扫描结果失败：" + String(err));
+  } finally {
+    updateTrashButtons();
+  }
 });
