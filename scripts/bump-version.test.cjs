@@ -27,13 +27,14 @@ function git(root, ...args) {
   assert.equal(result.status, 0, result.stderr || result.stdout);
   return result.stdout.trim();
 }
-function fixture(t, repository = true) {
+function fixture(t, repository = true, changelog = '# Changelog\n\n## [Unreleased]\n\n## [0.1] - 2026-09-01\n\n- Initial.\n') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'disklanded bump 中文 '));
   t.after(() => removeFixture(root));
   fs.mkdirSync(path.join(root, 'scripts'));
   for (const file of ['bump-version.js', 'version.js']) fs.copyFileSync(path.join(__dirname, file), path.join(root, 'scripts', file));
+  fs.copyFileSync(path.join(__dirname, '../bump-version.sh'), path.join(root, 'bump-version.sh'));
   fs.writeFileSync(path.join(root, 'VERSION'), '0.1\n');
-  fs.writeFileSync(path.join(root, 'CHANGELOG.md'), '# Changelog\n\n## [Unreleased]\n\n## [0.1] - 2026-09-01\n\n- Initial.\n');
+  fs.writeFileSync(path.join(root, 'CHANGELOG.md'), changelog);
   fs.writeFileSync(path.join(root, '.gitignore'), '.worktrees/\n');
   fs.writeFileSync(path.join(root, 'unrelated.txt'), 'original\n');
   if (repository) {
@@ -53,6 +54,91 @@ function bump(root, version, ...options) {
 }
 function success(result) { assert.equal(result.status, 0, result.stderr || result.stdout); }
 function snapshot(root) { return ['VERSION', 'CHANGELOG.md'].map(file => fs.readFileSync(path.join(root, file), 'utf8')); }
+
+test('first release succeeds through the shell entry point with one final newline and multiline notes', t => {
+  for (const changelog of ['# 更新记录\n\n## [Unreleased]\n\n- 初始说明。\n', '# 更新记录\n']) {
+    const root = fixture(t, true, changelog);
+    success(command('bash', [path.join(root, 'bump-version.sh'), '0.1.1', '--notes', '中文说明  \r\n\r\n第二段  '], os.tmpdir()));
+    const content = fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
+    assert.match(content, /## \[0\.1\.1\]/);
+    assert.equal(content, content.trimEnd() + '\n');
+    git(root, 'show', '--format=', '--check', 'HEAD');
+    assert.equal(git(root, 'status', '--porcelain'), '');
+    assert.equal(git(root, 'rev-parse', 'v0.1.1^{commit}'), git(root, 'rev-parse', 'main'));
+    const head = git(root, 'rev-parse', 'main');
+    success(bump(root, '0.1.1'));
+    assert.equal(git(root, 'rev-parse', 'main'), head);
+  }
+});
+
+test('--resume repairs the old first-release EOF failure and preserves staged unrelated work', t => {
+  const root = fixture(t, true, '# 更新记录\n\n## [Unreleased]\n\n- 初始说明。\n');
+  const original = fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
+  fs.writeFileSync(path.join(root, 'VERSION'), '0.1.1\n');
+  fs.writeFileSync(path.join(root, 'CHANGELOG.md'), original + '\n## [0.1.1] - 2026-10-02\n\n### Changed\n\n- Build Test\n\n');
+  fs.writeFileSync(path.join(root, 'unrelated.txt'), 'unrelated staged work\n');
+  git(root, 'add', 'unrelated.txt', 'VERSION', 'CHANGELOG.md');
+  const head = git(root, 'rev-parse', 'main');
+  const pending = snapshot(root);
+  const staged = git(root, 'diff', '--cached', '--binary', '--', 'unrelated.txt');
+  assert.match(bump(root, '0.1.1').stderr, /--resume/);
+  assert.deepEqual(snapshot(root), pending);
+  success(bump(root, '0.1.1', '--resume'));
+  assert.notEqual(git(root, 'rev-parse', 'main'), head);
+  assert.equal(fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8'), pending[1].trimEnd() + '\n');
+  assert.equal(git(root, 'diff', '--cached', '--binary', '--', 'unrelated.txt'), staged);
+  assert.equal(git(root, 'rev-parse', 'v0.1.1^{commit}'), git(root, 'rev-parse', 'main'));
+  git(root, 'show', '--format=', '--check', 'HEAD');
+});
+
+test('--resume rejects mismatched versions, missing entries, downgrades and conflicting options before writes', t => {
+  const root = fixture(t);
+  for (const [version, content, args] of [
+    ['0.1', '## [0.1.1] - 2026-10-02\n', []],
+    ['0.1.1', '# No version entry\n', []],
+    ['0.0.1', '## [0.0.1] - 2026-10-02\n', []],
+    ['0.1.1', '## [0.1.1] - 2026-10-02\n', ['--no-commit']],
+    ['0.1.1', '## [0.1.1] - 2026-10-02\n', ['--notes', 'replace notes']],
+  ]) {
+    fs.writeFileSync(path.join(root, 'VERSION'), version + '\n');
+    fs.writeFileSync(path.join(root, 'CHANGELOG.md'), content);
+    const before = snapshot(root);
+    assert.equal(bump(root, version === '0.1' ? '0.1.1' : version, '--resume', ...args).status, 1);
+    assert.deepEqual(snapshot(root), before);
+    assert.equal(git(root, 'tag', '--list'), '');
+  }
+});
+
+test('formatting failures report Git stdout and can be resumed after the reported line is fixed', t => {
+  const root = fixture(t);
+  success(bump(root, '0.1.1', '--no-commit'));
+  const file = path.join(root, 'CHANGELOG.md');
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('Release 0.1.1.', 'Release 0.1.1.  '));
+  git(root, 'add', 'VERSION', 'CHANGELOG.md');
+  const head = git(root, 'rev-parse', 'main');
+  const result = bump(root, '0.1.1', '--resume');
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /validation failed before commit/);
+  assert.match(result.stderr, /CHANGELOG.md:\d+: trailing whitespace/);
+  assert.doesNotMatch(result.stderr, /identity\/signing/);
+  assert.equal(git(root, 'rev-parse', 'main'), head);
+  assert.equal(git(root, 'tag', '--list'), '');
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('Release 0.1.1.  ', 'Release 0.1.1.'));
+  success(bump(root, '0.1.1', '--resume'));
+});
+
+test('--resume never commits edits to an already tagged version', t => {
+  const root = fixture(t);
+  success(bump(root, '0.1.1'));
+  const head = git(root, 'rev-parse', 'main'), tag = git(root, 'rev-parse', 'v0.1.1');
+  const file = path.join(root, 'CHANGELOG.md');
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8') + '\n- Pending notes.\n');
+  const before = snapshot(root);
+  assert.equal(bump(root, '0.1.1', '--resume').status, 1);
+  assert.deepEqual(snapshot(root), before);
+  assert.equal(git(root, 'rev-parse', 'main'), head);
+  assert.equal(git(root, 'rev-parse', 'v0.1.1'), tag);
+});
 
 test('default bump commits directly on main, tags and preserves unrelated staged work', t => {
   const root = fixture(t);
@@ -195,6 +281,10 @@ test('a commit failure keeps the version edits on main without creating a branch
   assert.equal(git(root, 'diff', '--cached', '--binary'), staged);
   assert.equal(git(root, 'branch', '--list', 'session/*'), '');
   assert.equal(git(root, 'worktree', 'list', '--porcelain').split('\n').filter(line => line.startsWith('worktree ')).length, 1);
+  git(root, 'config', 'user.name', 'Version Test');
+  success(bump(root, '0.1.1', '--resume'));
+  assert.equal(git(root, 'rev-parse', 'v0.1.1^{commit}'), git(root, 'rev-parse', 'main'));
+  assert.equal(git(root, 'diff', '--cached', '--binary'), staged);
 });
 
 test('tag signing failure keeps the main commit and allows a safe retry', t => {

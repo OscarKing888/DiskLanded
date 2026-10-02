@@ -16,13 +16,14 @@ function formatLocalDate(date) {
 function parseArgs(argv) {
   const args = [...argv];
   const version = args.shift();
-  if (!version) throw new Error('Usage: bump-version.sh|bump-version.bat <version> [--date YYYY-MM-DD] [--notes "text"] [--no-tag] [--no-commit]');
+  if (!version) throw new Error('Usage: bump-version.sh|bump-version.bat <version> [--date YYYY-MM-DD] [--notes "text"] [--no-tag] [--no-commit] [--resume]');
   validateVersion(version);
   const options = { version, date: formatLocalDate(new Date()), notes: [], commit: true, tag: true };
   while (args.length) {
     const flag = args.shift();
     if (flag === '--no-commit') options.commit = false;
     else if (flag === '--no-tag') options.tag = false;
+    else if (flag === '--resume') options.resume = true;
     else if (flag === '--date' || flag === '--notes') {
       const value = args.shift();
       if (!value || value.startsWith('--')) throw new Error(`Missing value for ${flag}.`);
@@ -36,11 +37,19 @@ function parseArgs(argv) {
     throw new Error(`Invalid date "${options.date}". Expected a real YYYY-MM-DD date.`);
   }
   options.tag = options.commit && options.tag;
+  if (options.resume && !options.commit) throw new Error('--resume cannot be combined with --no-commit.');
+  if (options.resume && options.notes.length) throw new Error('--resume keeps existing notes; edit CHANGELOG.md before resuming instead of passing --notes.');
   return options;
 }
 
 function git(args, cwd = ROOT) {
-  return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  try {
+    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  } catch (error) {
+    // diff --check 的诊断在 stdout；只读 stderr 会丢失真正的失败原因。
+    throw new Error([`git ${args[0]} failed (exit ${error.status ?? error.code}):`,
+      error.stdout?.trim(), error.stderr?.trim(), !error.stdout && !error.stderr ? error.message : ''].filter(Boolean).join('\n'));
+  }
 }
 
 function updateFiles(root, options) {
@@ -51,13 +60,14 @@ function updateFiles(root, options) {
   let changelog = current;
   if (!current.split(/\r?\n/).some(line => line === heading || line.startsWith(heading + ' - '))) {
     const notes = options.notes.length ? options.notes : [`Release ${options.version}.`];
-    const entry = `${heading} - ${options.date}\n\n### Changed\n\n${notes.map(note => '- ' + note.replace(/\r?\n/g, '\n  ')).join('\n')}\n\n`;
+    const entry = `${heading} - ${options.date}\n\n### Changed\n\n${notes.map(note => '- ' + note.replace(/\r\n?/g, '\n').replace(/\n/g, '\n  ')).join('\n')}\n\n`
+      .split('\n').map(line => line.trimEnd()).join('\n');
     const firstRelease = current.search(/^## \[(?!Unreleased\])/m);
     changelog = firstRelease < 0 ? current.trimEnd() + '\n\n' + entry : current.slice(0, firstRelease) + entry + current.slice(firstRelease);
   }
-  // 全部内容校验完成后再写入；版本的唯一来源仍是 VERSION。
+  // 先生成完整内容再写入；版本的唯一来源仍是 VERSION。
   fs.writeFileSync(versionFile, options.version + '\n', 'utf8');
-  fs.writeFileSync(changelogFile, changelog, 'utf8');
+  fs.writeFileSync(changelogFile, changelog.trimEnd() + '\n', 'utf8');
 }
 
 function withLock(common, branch, action) {
@@ -105,7 +115,7 @@ function tagVersion(version, commit, root) {
     git(['tag', '-a', tag, commit, '-m', `Release ${version}`], root);
     console.log(`Created annotated tag ${tag} at ${commit}.`);
   } catch (error) {
-    throw new Error(`Version commit ${commit} was kept, but creating tag ${tag} failed: ${error.message}\nFix Git signing/identity and rerun the same version. Existing tags are never overwritten.`);
+    throw new Error(`Version commit ${commit} was kept, but creating tag ${tag} failed: ${error.message}\nFix the reported Git error and rerun the same version. Existing tags are never overwritten.`);
   }
 }
 
@@ -121,28 +131,37 @@ function main(argv) {
     mainGit(['ls-files', '--error-unmatch', '--', ...VERSION_FILES]);
     const previous = readVersion(root);
     const changelog = fs.readFileSync(path.join(root, 'CHANGELOG.md'), 'utf8');
-    if (options.commit && mainGit(['status', '--porcelain', '--untracked-files=all', '--', ...VERSION_FILES])) {
-      throw new Error('Version files already have uncommitted changes on main; commit them first. No files were changed.');
+    const dirty = Boolean(mainGit(['status', '--porcelain', '--untracked-files=all', '--', ...VERSION_FILES]));
+    const hasEntry = changelog.split(/\r?\n/).some(line => line.startsWith(`## [${options.version}] - `));
+    if (options.resume && (previous !== options.version || !hasEntry)) {
+      throw new Error('--resume requires VERSION and an existing CHANGELOG heading to match the requested version. No files were changed.');
+    }
+    if (options.commit && dirty && !options.resume) {
+      throw new Error(`Version files already have uncommitted changes on main. Review VERSION and CHANGELOG.md; to finish the prepared version, rerun its existing VERSION (${previous}) with --resume. No files were changed.`);
     }
     const tag = `v${options.version}`;
     mainGit(['check-ref-format', `refs/tags/${tag}`]);
     if (mainGit(['tag', '--list', tag])) {
-      if (previous !== options.version || mainGit(['diff', '--name-only', `${tag}^{commit}`, 'main', '--', ...VERSION_FILES])) {
+      if (dirty || previous !== options.version || mainGit(['diff', '--name-only', `${tag}^{commit}`, 'main', '--', ...VERSION_FILES])) {
         throw new Error(`Version tag ${tag} already exists for different version files; use a new version. No files were changed.`);
       }
       console.log(`Version ${options.version} is already committed and tagged as ${tag}; no changes needed.`);
       return;
     }
-    const before = previous.split('.').map(Number), after = options.version.split('.').map(Number);
-    const delta = [0, 1, 2].map(i => (after[i] || 0) - (before[i] || 0)).find(value => value !== 0);
-    if (delta < 0) throw new Error('The new version must not be lower than VERSION. No files were changed.');
+    const committedVersion = validateVersion(mainGit(['show', 'HEAD:VERSION']));
+    const after = options.version.split('.').map(Number);
+    for (const baseline of [previous, committedVersion]) {
+      const before = baseline.split('.').map(Number);
+      const delta = [0, 1, 2].map(i => (after[i] || 0) - (before[i] || 0)).find(value => value !== 0);
+      if (delta < 0) throw new Error('The new version must not be lower than working or committed VERSION. No files were changed.');
+    }
 
     if (!options.commit) {
       updateFiles(root, options);
       console.log(`Updated VERSION ${previous} -> ${options.version} and CHANGELOG.md on main; skipped commit and tag (--no-commit).`);
       return;
     }
-    if (previous === options.version && changelog.split(/\r?\n/).some(line => line.startsWith(`## [${options.version}] - `))) {
+    if (!dirty && previous === options.version && hasEntry) {
       if (options.tag) tagVersion(options.version, mainGit(['rev-parse', 'main']), root);
       console.log('No version changes to commit.');
       return;
@@ -150,11 +169,15 @@ function main(argv) {
 
     updateFiles(root, options);
     try {
-      mainGit(['diff', '--check', '--', ...VERSION_FILES]);
+      mainGit(['diff', '--check', 'HEAD', '--', ...VERSION_FILES]);
+    } catch (error) {
+      throw new Error(`Version file validation failed before commit:\n${error.message}\nChanges were kept in ${root}. Fix the reported formatting, then rerun version ${options.version} with --resume.`);
+    }
+    try {
       // --only 只提交版本文件，保留其他路径的暂存内容。
       mainGit(['commit', '--only', '-m', `chore: bump version to ${options.version}`, '--', ...VERSION_FILES]);
     } catch (error) {
-      throw new Error(`Version files were updated on main, but the commit failed: ${error.message}\nChanges were kept in ${root}. Fix Git identity/signing and commit only VERSION and CHANGELOG.md before retrying.`);
+      throw new Error(`Version files were updated on main, but the commit failed:\n${error.message}\nChanges were kept in ${root}. Fix the reported Git error, then rerun version ${options.version} with --resume.`);
     }
     const commit = mainGit(['rev-parse', 'main']);
     if (options.tag) tagVersion(options.version, commit, root);
