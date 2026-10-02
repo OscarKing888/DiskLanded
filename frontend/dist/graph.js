@@ -57,7 +57,7 @@ function graphMarkup(segments) {
   let depth = 0;
   segments.forEach((s, i) => {
     while (depth >= s.lineage.length) { parts.push("</g>"); --depth; }
-    parts.push(`<g id="graphBranch${i}"><path data-node="${i}" d="${s.d}" fill="${s.color}" tabindex="${s.node.kind === "other" ? -1 : 0}" role="button" aria-label="${esc(s.node.name)} ${graphSize(s.node.alloc)}${s.node.kind === "dir" ? '，点击进入目录' : ''}"/>`);
+    parts.push(`<g id="graphBranch${i}"><path data-node="${i}" data-kind="${s.node.kind}" d="${s.d}" fill="${s.color}" tabindex="${s.node.kind === "other" ? -1 : 0}" role="button" aria-label="${esc(s.node.name)} ${graphSize(s.node.alloc)}${s.node.kind === "dir" ? '，点击进入目录' : ''}"/>`);
     ++depth;
   });
   while (depth-- > 0) parts.push("</g>");
@@ -263,18 +263,43 @@ class DiskGraph {
     const y = Math.max(8, Math.min(bounds.height - this.tooltipSize.height - 30, point.y - bounds.top + 12));
     tip.style.transform = `translate3d(${x}px, ${y}px, 0)`;
   }
+  // 图形内的扇区、气泡、右侧列表和详情都可以映射回对应节点。
+  nodeFromElement(el) {
+    if (!this.data || !el || !el.closest) return null;
+    const item = el.closest("#sunburst [data-node]");
+    if (item) return this.segments[+item.dataset.node]?.node || null;
+    const row = el.closest("#graphLegend [data-child]");
+    if (row) return this.data.root.children[+row.dataset.child] || null;
+    const file = el.closest("#graphDetail [data-file]");
+    if (file) return this.segments.find((s) => s.node.path === file.dataset.file)?.node || null;
+    return null;
+  }
   bindFileDrag() {
     // 使用指针捕获，兼容 macOS WKWebView 和 Windows WebView2 的拖动行为。
+    // 拖动中光标变为抓取，进入待删除区变为“复制”，并有文件名标签跟随指针。
+    const ghost = $("dragGhost");
+    const setReady = (drag, ready) => {
+      if (drag.ready === ready) return;
+      drag.ready = ready;
+      document.body.classList.toggle("fileDropReady", ready);
+      $("collector").classList.toggle("dragover", ready);
+      ghost.classList.toggle("ready", ready);
+      ghost.lastChild.textContent = ready ? "松开加入待删除" : graphSize(drag.node.alloc);
+    };
+    const finish = (drag) => {
+      if (drag && drag.moved) setReady(drag, false);
+      document.body.classList.remove("fileDragging");
+      ghost.hidden = true;
+    };
     for (const id of ["sunburst", "graphLegend", "graphDetail"]) {
       const surface = $(id);
       let drag = null, suppressClick = false;
       surface.ondragstart = (e) => e.preventDefault();
       surface.addEventListener("pointerdown", (e) => {
-        if (e.button !== 0 || scanning || trashing || e.target.closest(".detailActions")) return;
-        const sector = e.target.closest("[data-node]"), file = e.target.closest("[data-file]");
-        const node = sector ? this.segments[+sector.dataset.node].node : file && this.segments.find((s) => s.node.path === file.dataset.file)?.node;
+        if (e.button !== 0 || e.ctrlKey || scanning || trashing || e.target.closest(".detailActions")) return;
+        const node = this.nodeFromElement(e.target);
         if (!node || node.kind !== "file") return;
-        drag = { node, x: e.clientX, y: e.clientY, moved: false };
+        drag = { node, x: e.clientX, y: e.clientY, moved: false, ready: false };
         e.preventDefault();
       });
       const inside = (e) => {
@@ -283,23 +308,29 @@ class DiskGraph {
       };
       surface.addEventListener("pointermove", (e) => {
         if (!drag) return;
-        if (!e.buttons) { drag = null; $("collector").classList.remove("dragover"); return; }
+        if (!e.buttons) { finish(drag); drag = null; return; }
         // 移动超过阈值才捕获指针：过早捕获会把普通点击的目标改成容器，导致无法选中文件。
         if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 8) {
           drag.moved = true; surface.setPointerCapture(e.pointerId);
+          this.cancelHover();
+          document.body.classList.add("fileDragging");
+          ghost.innerHTML = `<strong>${esc(drag.node.name)}</strong><span>${graphSize(drag.node.alloc)}</span>`;
+          ghost.hidden = false;
         }
-        $("collector").classList.toggle("dragover", drag.moved && inside(e));
+        if (!drag.moved) return;
+        ghost.style.transform = `translate3d(${e.clientX + 14}px, ${e.clientY + 16}px, 0)`;
+        setReady(drag, inside(e));
       });
       surface.addEventListener("pointerup", (e) => {
         if (!drag) return;
         const pending = drag; drag = null;
-        $("collector").classList.remove("dragover");
+        finish(pending);
         if (!pending.moved) return;
         suppressClick = true;
         if (inside(e)) this.collect(pending.node);
         setTimeout(() => { suppressClick = false; }, 0);
       });
-      surface.addEventListener("pointercancel", () => { drag = null; $("collector").classList.remove("dragover"); });
+      surface.addEventListener("pointercancel", () => { finish(drag); drag = null; });
       surface.addEventListener("click", (e) => {
         if (suppressClick) { e.preventDefault(); e.stopImmediatePropagation(); }
       }, true);

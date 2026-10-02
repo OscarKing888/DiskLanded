@@ -156,7 +156,16 @@ body[data-view=graph] .resultTabs button { padding: 6px 20px; }
 .legendRow strong { white-space: nowrap; font-weight: 400; font-variant-numeric: tabular-nums; }
 .legendRow:hover, .legendRow.highlight { background: #ffffff12; }
 .legendRow.other { color: var(--graph-muted); }
-.legendRow[draggable=true] { cursor: grab; }
+.legendRow[draggable=true], #sunburst path[data-kind=file], #sunburst .bubble { cursor: grab; }
+/* 拖动文件：全局抓取光标；进入待删除区时变为复制光标。 */
+body.fileDragging, body.fileDragging * { cursor: grabbing !important; user-select: none; }
+body.fileDropReady, body.fileDropReady * { cursor: copy !important; }
+.dragGhost { position: fixed; left: 0; top: 0; z-index: 30; pointer-events: none; display: flex; flex-direction: column; gap: 1px; max-width: 260px;
+  padding: 6px 10px; border-radius: 7px; background: #11161ef2; border: 1px solid #4b5565; color: #f2f3f6; font-size: 12px; box-shadow: 0 6px 18px #0006; will-change: transform; }
+.dragGhost strong { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dragGhost span { color: #a3aab6; font-size: 11px; }
+.dragGhost.ready { border-color: #5ff3bd; background: #1d3a35f2; }
+.dragGhost.ready span { color: #5ff3bd; }
 .graphDetail { border-top: 1px solid var(--graph-line); margin-top: 12px; padding-top: 10px; min-height: 104px; }
 .graphDetail h3 { font-size: 15px; margin: 0 0 4px; word-break: break-all; }
 .graphDetail p { color: var(--graph-muted); font-size: 12px; margin: 5px 0; }

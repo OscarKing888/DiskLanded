@@ -129,6 +129,7 @@ test('highlight references a nested branch without native duplicate tooltips', (
   assert(!html.includes('<title>'));
   assert(html.includes('&lt;file&gt;'));
   assert(html.includes('aria-hidden="true"'));
+  assert(html.includes('data-kind="file"'),'file sectors should be marked draggable');
 });
 
 test('colour wheel is continuous, bright and lightens with depth', () => {
