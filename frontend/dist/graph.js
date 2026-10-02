@@ -180,7 +180,7 @@ class DiskGraph {
         const node = sector ? this.segments[+sector.dataset.node].node : file && this.segments.find((s) => s.node.path === file.dataset.file)?.node;
         if (!node || node.kind !== "file") return;
         drag = { node, x: e.clientX, y: e.clientY, moved: false };
-        e.preventDefault(); surface.setPointerCapture(e.pointerId);
+        e.preventDefault();
       });
       const inside = (e) => {
         const box = $("collector").getBoundingClientRect();
@@ -188,7 +188,11 @@ class DiskGraph {
       };
       surface.addEventListener("pointermove", (e) => {
         if (!drag) return;
-        drag.moved ||= Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 8;
+        if (!e.buttons) { drag = null; $("collector").classList.remove("dragover"); return; }
+        // 移动超过阈值才捕获指针：过早捕获会把普通点击的目标改成容器，导致无法选中文件。
+        if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 8) {
+          drag.moved = true; surface.setPointerCapture(e.pointerId);
+        }
         $("collector").classList.toggle("dragover", drag.moved && inside(e));
       });
       surface.addEventListener("pointerup", (e) => {

@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- 修复图形中单击文件无法选中（指针捕获使点击目标变为容器）的问题。
 - 环形图改用 DaisyDisk 风格的明亮色环配色：颜色随扇区位置连续渐变，外层更亮，合并项目为深灰。
 - 修复 bump version：始终在 main 更新和提交版本，从其他 worktree 调用也不会创建临时分支。
 - 增加 macOS 通用应用、Windows x64 和 Linux x64 的自动打包及 GitHub Release。
