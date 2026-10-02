@@ -29,7 +29,28 @@ Go 负责扫描和业务逻辑，界面用 Wails v2（系统自带 WebView），
 
 ## 构建
 
-需要 Go（版本见 `go.mod`）和 Wails CLI：
+本地构建需要 Go（版本见 `go.mod`），并将 `go` 加入 `PATH`。macOS 还需要 Xcode Command Line
+Tools（可用 `xcode-select --install` 安装）；Windows 可使用系统自带的 Windows PowerShell 5.1。
+
+在仓库根目录运行：
+
+```sh
+# macOS：Intel / Apple Silicon 通用应用，生成 build/bin/DiskLanded.app
+./build-mac.sh
+```
+
+```powershell
+# Windows x64：生成 build\bin\DiskLanded.exe（PowerShell 或 cmd 均可运行）
+.\build-win.cmd
+# 也可直接在 PowerShell 中运行
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build-win.ps1
+```
+
+脚本自动定位仓库目录，支持含空格的路径，也可从其他目录用脚本路径启动。通过 `go run` 使用
+`go.mod` 指定版本的 Wails CLI，无需提前安装 CLI；首次运行需要联网下载 Go 依赖，后续复用 Go
+缓存。构建失败返回非零退出码。Windows 启动脚本只为本次进程设置执行策略。
+
+如需手动构建（含 Linux），先安装 Wails CLI：
 
 ```sh
 go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
@@ -37,7 +58,7 @@ go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
 # macOS（生成 build/bin/DiskLanded.app）
 wails build -skipbindings -platform darwin/universal
 # Windows（生成 build\bin\DiskLanded.exe）
-wails build -skipbindings
+wails build -skipbindings -platform windows/amd64
 # Linux（需要 libgtk-3-dev、libwebkit2gtk-4.1-dev；生成 build/bin/DiskLanded）
 wails build -skipbindings -tags webkit2_41
 ```
