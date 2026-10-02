@@ -1,17 +1,21 @@
 "use strict";
 
-// 柔和的珊瑚红、杏橙、麦黄、鼠尾草绿、湖青、雾蓝、淡紫。
-const graphPalette = ["#d77a78", "#d99d6c", "#d3bc71", "#83b78a", "#73b9bd", "#7e9fd0", "#ad8ac6"];
-function mixGraphColor(a, b, amount) {
-  return "#" + [1, 3, 5].map((offset) => {
-    const start = parseInt(a.slice(offset, offset + 2), 16), end = parseInt(b.slice(offset, offset + 2), 16);
-    return Math.round(start + (end - start) * amount).toString(16).padStart(2, "0");
-  }).join("");
+// 参考 DaisyDisk：颜色取自扇区中点在色环上的位置，整圈形成连续的明亮彩虹，
+// 子项沿父项附近的色相渐变；合并的小项目使用深灰，不抢占视线。
+const graphOtherColor = "#41454e";
+const graphHueOffset = 330;
+function hslColor(hue, saturation, lightness) {
+  const s = saturation / 100, l = lightness / 100, a = s * Math.min(l, 1 - l);
+  const channel = (n) => {
+    const k = (n + hue / 30) % 12;
+    return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)))).toString(16).padStart(2, "0");
+  };
+  return "#" + channel(0) + channel(8) + channel(4);
 }
-function graphColor(fraction) {
-  const position = Math.min(1, Math.max(0, fraction)) * (graphPalette.length - 1);
-  const index = Math.floor(position);
-  return mixGraphColor(graphPalette[index], graphPalette[Math.min(index + 1, graphPalette.length - 1)], position - index);
+// fraction 为扇区中点在整圈中的位置（0–1，从 12 点方向顺时针）；越外层越亮。
+function graphColor(fraction, depth = 0) {
+  const hue = ((graphHueOffset + fraction * 360) % 360 + 360) % 360;
+  return hslColor(hue, 82, Math.min(80, 68 + depth * 3));
 }
 function graphSize(bytes) {
   if (bytes >= 1e9) return (bytes / 1e9).toFixed(1) + " GB";
@@ -28,33 +32,22 @@ function sectorPath(inner, outer, start, end) {
   return `M${point(outer, start)} A${outer},${outer} 0 ${large} 1 ${point(outer, end)} L${point(inner, end)} A${inner},${inner} 0 ${large} 0 ${point(inner, start)} Z`;
 }
 function graphSegments(root) {
-  const segments = [];
-  const ranked = (root.children || []).filter((n) => n.kind !== "other" && n.alloc > 0).slice().sort((a, b) => b.alloc - a.alloc);
-  // 色带跨度按占用的平方根分配，让大小悬殊时的大扇区也有清晰的颜色差别。
-  const weights = ranked.map((n) => Math.sqrt(n.alloc));
-  const colorSpan = weights.slice(0, -1).reduce((sum, weight) => sum + weight, 0);
-  let colorOffset = 0;
-  const colors = new Map(ranked.map((node, rank) => {
-    const color = graphColor(colorSpan ? colorOffset / colorSpan : 0);
-    colorOffset += weights[rank];
-    return [node, color];
-  }));
-  function walk(parent, start, end, depth, inheritedColor, lineage) {
+  const segments = [], origin = -Math.PI / 2;
+  function walk(parent, start, end, depth, lineage) {
     if (depth >= 4 || parent.alloc <= 0) return;
     let angle = start;
     (parent.children || []).forEach((node) => {
       const next = Math.min(end, angle + (end - start) * node.alloc / parent.alloc);
-      const baseColor = depth === 0 ? colors.get(node) : inheritedColor;
       const branch = lineage.concat(node.path);
       if (next - angle > 0.00001) {
-        const color = node.kind === "other" ? "#626873" : mixGraphColor(baseColor, "#e8edf4", depth * 0.1);
+        const color = node.kind === "other" ? graphOtherColor : graphColor(((angle + next) / 2 - origin) / (Math.PI * 2), depth);
         segments.push({ node, color, lineage: branch, d: sectorPath(85 + depth * 52, 136 + depth * 52, angle, next) });
-        walk(node, angle, next, depth + 1, baseColor, branch);
+        walk(node, angle, next, depth + 1, branch);
       }
       angle = next;
     });
   }
-  walk(root, -Math.PI / 2, Math.PI * 1.5, 0, graphPalette[0], []);
+  walk(root, origin, origin + Math.PI * 2, 0, []);
   return segments;
 }
 
@@ -304,7 +297,7 @@ class DiskGraph {
     $("graphBreadcrumbs").innerHTML = this.data.breadcrumbs.map((n) => `<button data-path="${esc(n.path)}" title="${esc(n.path || n.name)}">${esc(n.name)}</button>`).join('<span aria-hidden="true">›</span>');
     $("graphLegend").innerHTML = root.children.map((n, i) => {
       const sector = this.sectorByNode.get(n);
-      return `<div class="legendRow ${n.kind === "other" ? 'other' : ''}" data-child="${i}" tabindex="0" role="button" aria-label="${esc(n.name)} ${graphSize(n.alloc)}" ${n.kind === "file" ? `draggable="true" data-file="${esc(n.path)}"` : ''} title="${esc(n.path || '小文件、目录元数据与合并显示的项目')}"><i style="background:${sector ? sector.color : '#626873'}"></i><span>${esc(n.name)}${n.kind === "dir" ? ' <b>›</b>' : ''}</span><strong>${graphSize(n.alloc)}</strong></div>`;
+      return `<div class="legendRow ${n.kind === "other" ? 'other' : ''}" data-child="${i}" tabindex="0" role="button" aria-label="${esc(n.name)} ${graphSize(n.alloc)}" ${n.kind === "file" ? `draggable="true" data-file="${esc(n.path)}"` : ''} title="${esc(n.path || '小文件、目录元数据与合并显示的项目')}"><i style="background:${sector ? sector.color : graphOtherColor}"></i><span>${esc(n.name)}${n.kind === "dir" ? ' <b>›</b>' : ''}</span><strong>${graphSize(n.alloc)}</strong></div>`;
     }).join("");
     this.legendByNode = new Map(Array.from($("graphLegend").children, (row, i) => [root.children[i], row]));
     this.showDetail(null); this.syncControls();
@@ -335,7 +328,7 @@ class DiskGraph {
     if (previous && previous.node === node && previous.pinned === pinned && previous.root === this.data?.root && previous.mode === this.mode) return;
     this.detailState = { node, pinned, root: this.data?.root, mode: this.mode };
     if (!node) {
-      $("graphDetail").innerHTML = `<p>${this.mode === "files" ? '仅显示符合大小和出现日期筛选的文件。' : '扇区宽度表示占用大小，从内到外表示目录层级。'}</p><p>占用由大到小，从红色渐变到紫色；灰色为合并项目。点击文件查看日期、定位或加入待删除。</p>`;
+      $("graphDetail").innerHTML = `<p>${this.mode === "files" ? '仅显示符合大小和出现日期筛选的文件。' : '扇区宽度表示占用大小，从内到外表示目录层级。'}</p><p>颜色沿色环按位置渐变，同一分支色调相近；深灰为合并的小项目。点击文件查看日期、定位或加入待删除。</p>`;
       return;
     }
     const percent = this.data.root.alloc ? (node.alloc / this.data.root.alloc * 100).toFixed(1) : "0.0";
@@ -383,4 +376,4 @@ class DiskGraph {
   }
 }
 
-if (typeof module !== "undefined" && module.exports) module.exports = { graphSize, sectorPath, graphSegments, graphMarkup, graphColor, DiskGraph };
+if (typeof module !== "undefined" && module.exports) module.exports = { graphSize, sectorPath, graphSegments, graphMarkup, graphColor, graphOtherColor, DiskGraph };
