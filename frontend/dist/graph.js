@@ -1,6 +1,18 @@
 "use strict";
 
-const graphHues = [155, 182, 211, 244, 275, 313, 340, 34, 67, 105];
+// 柔和的珊瑚红、杏橙、麦黄、鼠尾草绿、湖青、雾蓝、淡紫。
+const graphPalette = ["#d77a78", "#d99d6c", "#d3bc71", "#83b78a", "#73b9bd", "#7e9fd0", "#ad8ac6"];
+function mixGraphColor(a, b, amount) {
+  return "#" + [1, 3, 5].map((offset) => {
+    const start = parseInt(a.slice(offset, offset + 2), 16), end = parseInt(b.slice(offset, offset + 2), 16);
+    return Math.round(start + (end - start) * amount).toString(16).padStart(2, "0");
+  }).join("");
+}
+function graphColor(fraction) {
+  const position = Math.min(1, Math.max(0, fraction)) * (graphPalette.length - 1);
+  const index = Math.floor(position);
+  return mixGraphColor(graphPalette[index], graphPalette[Math.min(index + 1, graphPalette.length - 1)], position - index);
+}
 function graphSize(bytes) {
   if (bytes >= 1e9) return (bytes / 1e9).toFixed(1) + " GB";
   if (bytes >= 1e6) return (bytes / 1e6).toFixed(1) + " MB";
@@ -17,23 +29,32 @@ function sectorPath(inner, outer, start, end) {
 }
 function graphSegments(root) {
   const segments = [];
-  function walk(parent, start, end, depth, hue, lineage) {
+  const ranked = (root.children || []).filter((n) => n.kind !== "other" && n.alloc > 0).slice().sort((a, b) => b.alloc - a.alloc);
+  // 色带跨度按占用的平方根分配，让大小悬殊时的大扇区也有清晰的颜色差别。
+  const weights = ranked.map((n) => Math.sqrt(n.alloc));
+  const colorSpan = weights.slice(0, -1).reduce((sum, weight) => sum + weight, 0);
+  let colorOffset = 0;
+  const colors = new Map(ranked.map((node, rank) => {
+    const color = graphColor(colorSpan ? colorOffset / colorSpan : 0);
+    colorOffset += weights[rank];
+    return [node, color];
+  }));
+  function walk(parent, start, end, depth, inheritedColor, lineage) {
     if (depth >= 4 || parent.alloc <= 0) return;
     let angle = start;
-    (parent.children || []).forEach((node, i) => {
+    (parent.children || []).forEach((node) => {
       const next = Math.min(end, angle + (end - start) * node.alloc / parent.alloc);
-      const colorHue = depth === 0 ? graphHues[i % graphHues.length] : hue;
+      const baseColor = depth === 0 ? colors.get(node) : inheritedColor;
       const branch = lineage.concat(node.path);
       if (next - angle > 0.00001) {
-        const color = node.kind === "other" ? "#626873" : node.kind === "file"
-          ? `hsl(${colorHue}, 17%, ${61 + depth * 4}%)` : `hsl(${colorHue}, 89%, ${56 + depth * 7}%)`;
+        const color = node.kind === "other" ? "#626873" : mixGraphColor(baseColor, "#e8edf4", depth * 0.1);
         segments.push({ node, color, lineage: branch, d: sectorPath(85 + depth * 52, 136 + depth * 52, angle, next) });
-        walk(node, angle, next, depth + 1, colorHue, branch);
+        walk(node, angle, next, depth + 1, baseColor, branch);
       }
       angle = next;
     });
   }
-  walk(root, -Math.PI / 2, Math.PI * 1.5, 0, 155, []);
+  walk(root, -Math.PI / 2, Math.PI * 1.5, 0, graphPalette[0], []);
   return segments;
 }
 
@@ -314,7 +335,7 @@ class DiskGraph {
     if (previous && previous.node === node && previous.pinned === pinned && previous.root === this.data?.root && previous.mode === this.mode) return;
     this.detailState = { node, pinned, root: this.data?.root, mode: this.mode };
     if (!node) {
-      $("graphDetail").innerHTML = `<p>${this.mode === "files" ? '仅显示符合大小和出现日期筛选的文件。' : '扇区宽度表示占用大小，从内到外表示目录层级。'}</p><p>灰色为文件或合并的较小项目。点击文件查看日期、定位或加入待删除。</p>`;
+      $("graphDetail").innerHTML = `<p>${this.mode === "files" ? '仅显示符合大小和出现日期筛选的文件。' : '扇区宽度表示占用大小，从内到外表示目录层级。'}</p><p>占用由大到小，从红色渐变到紫色；灰色为合并项目。点击文件查看日期、定位或加入待删除。</p>`;
       return;
     }
     const percent = this.data.root.alloc ? (node.alloc / this.data.root.alloc * 100).toFixed(1) : "0.0";
@@ -362,4 +383,4 @@ class DiskGraph {
   }
 }
 
-if (typeof module !== "undefined" && module.exports) module.exports = { graphSize, sectorPath, graphSegments, graphMarkup, DiskGraph };
+if (typeof module !== "undefined" && module.exports) module.exports = { graphSize, sectorPath, graphSegments, graphMarkup, graphColor, DiskGraph };

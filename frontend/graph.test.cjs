@@ -130,3 +130,32 @@ test('highlight references a nested branch without native duplicate tooltips', (
   assert(html.includes('&lt;file&gt;'));
   assert(html.includes('aria-hidden="true"'));
 });
+
+test('rainbow spans soft red to violet without cycling for many siblings', () => {
+  const {graphColor}=require('./dist/graph.js');
+  assert.equal(graphColor(0),'#d77a78');
+  assert.equal(graphColor(1),'#ad8ac6');
+  assert.equal(new Set(Array.from({length:36},(_,i)=>graphColor(i/35))).size,36);
+});
+
+test('colors follow size rank, retain branch hue, and exclude grouped/empty items', () => {
+  const leaf={path:'/large/file',kind:'file',alloc:10,children:[]};
+  const large={path:'/large',kind:'dir',alloc:20,children:[leaf]};
+  const small={path:'/small',kind:'file',alloc:5,children:[]};
+  const other={kind:'other',alloc:100,children:[]};
+  const root={alloc:125,children:[small,other,{kind:'dir',alloc:0,children:[]},large]};
+  const colors=new Map(graphSegments(root).map(s=>[s.node,s.color]));
+  assert.equal(colors.get(large),'#d77a78');
+  assert.equal(colors.get(small),'#ad8ac6');
+  assert.equal(colors.get(other),'#626873');
+  assert.equal(colors.get(leaf),'#d98684');
+});
+
+test('a long tail of tiny directories does not make the largest branches all red', () => {
+  const children=Array.from({length:36},(_,i)=>({path:'/'+i,kind:'dir',alloc:i<3?[360,250,65][i]:1,children:[]}));
+  const segments=graphSegments({alloc:children.reduce((s,n)=>s+n.alloc,0),children});
+  assert.equal(segments[0].color,'#d77a78');
+  assert.equal(segments.at(-1).color,'#ad8ac6');
+  const [red,green,blue]=[1,3,5].map(offset=>parseInt(segments[1].color.slice(offset,offset+2),16));
+  assert(green-blue>25 && red>green,'second large branch should be a distinct warm orange/yellow');
+});
