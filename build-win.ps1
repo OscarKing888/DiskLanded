@@ -6,7 +6,16 @@ try {
         throw 'Run build-win.ps1 on Windows.'
     }
     if (-not (Get-Command go -CommandType Application -ErrorAction SilentlyContinue)) {
-        throw 'Install Go (see go.mod for the required version) and add it to PATH.'
+        # Terminals and IDEs opened before Go was installed retain the old PATH.
+        # Keep process-specific entries first, and refresh only this process.
+        $env:Path = @(
+            $env:Path
+            [Environment]::GetEnvironmentVariable('Path', 'Machine')
+            [Environment]::GetEnvironmentVariable('Path', 'User')
+        ) -join [IO.Path]::PathSeparator
+    }
+    if (-not (Get-Command go -CommandType Application -ErrorAction SilentlyContinue)) {
+        throw 'Go was not found in the process, system or user PATH. Install Go (see go.mod for the required version) and add its bin directory to PATH.'
     }
 
     # Resolve the project from this script, including paths containing spaces.

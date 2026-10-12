@@ -114,6 +114,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build-win.ps1
 脚本自动定位仓库目录，支持含空格的路径，也可从其他目录用脚本路径启动。通过 `go run` 使用
 `go.mod` 指定版本的 Wails CLI，无需提前安装 CLI；首次运行需要联网下载 Go 依赖，后续复用 Go
 缓存。构建失败返回非零退出码。Windows 启动脚本只为本次进程设置执行策略。
+如果当前终端找不到 Go，Windows 构建脚本会补读最新的系统和用户 `PATH`，兼容安装 Go 后尚未
+重启的终端或 IDE；不会修改持久环境变量。若仍提示找不到 Go，请将 Go 安装目录下的 `bin`
+目录加入 `PATH`（该目录应包含 `go.exe`）。
 
 如需手动构建（含 Linux），先安装 Wails CLI：
 
