@@ -14,13 +14,14 @@
 html, body { margin: 0; background: var(--bg); color: var(--text);
   font: 14px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei",
   "Noto Sans CJK SC", "Source Han Sans SC", "WenQuanYi Micro Hei", sans-serif; }
-.top { background: var(--panel); border-bottom: 1px solid var(--line); padding: 14px 20px; position: sticky; top: 0; z-index: 2; }
-.brand { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; }
+body { height: 100vh; height: 100dvh; display: flex; flex-direction: column; }
+.top { flex: none; background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 20px; position: sticky; top: 0; z-index: 2; }
+.brand { display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px; }
 .logo { font-size: 20px; font-weight: 700; }
 .sub { color: var(--muted); font-size: 13px; }
 .version { font-size: 11.5px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; font-variant-numeric: tabular-nums; }
 .version:empty { display: none; }
-#rootList { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+#rootList { list-style: none; margin: 0 0 4px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
 #rootList li { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px 2px 10px;
   display: flex; align-items: center; gap: 4px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
 #rootList li button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 15px; padding: 0 6px; }
@@ -37,9 +38,11 @@ button.trash { color: var(--danger); padding: 2px 10px; }
 button.trash:hover:not(:disabled) { border-color: var(--danger); }
 .action { white-space: nowrap; width: 1%; }
 .hint { color: var(--muted); font-size: 12.5px; margin: 8px 0 0; }
-.status { margin-top: 8px; color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status { margin-top: 4px; color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status.running { color: var(--text); }
-main { padding: 8px 20px 40px; }
+/* 主视图分配窗口剩余高度；页面仅在展开失败明细或空间不足时滚动。 */
+main { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 8px 20px 12px; }
+main > :not(#graphView):not(#listView) { flex: none; }
 section { margin-top: 18px; }
 h2 { font-size: 15px; margin: 0 0 8px; }
 .secHead { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
@@ -55,7 +58,10 @@ h2 { font-size: 15px; margin: 0 0 8px; }
 .vol dl { display: grid; grid-template-columns: repeat(3, 1fr); margin: 0; }
 .vol dt { color: var(--muted); font-size: 12px; }
 .vol dd { margin: 0; font-variant-numeric: tabular-nums; }
-.tableWrap { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; max-height: 420px; overflow: auto; }
+#listView { flex: 1; min-height: 260px; display: grid; grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+#listView > section { min-height: 0; display: flex; flex-direction: column; margin: 0; }
+.secHead { flex: none; }
+.tableWrap { flex: 1; min-height: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: auto; }
 table { width: 100%; border-collapse: collapse; }
 th { position: sticky; top: 0; background: var(--panel); text-align: left; font-weight: 600; color: var(--muted);
   font-size: 12.5px; padding: 7px 12px; border-bottom: 1px solid var(--line); }
@@ -71,7 +77,11 @@ a.path:hover { text-decoration: underline; }
 .empty { color: var(--muted); text-align: center; padding: 18px; }
 details { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; }
 summary { cursor: pointer; }
-.failList { max-height: 240px; overflow: auto; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; margin: 8px 0 0; padding-left: 18px; }
+/* 只给单行摘要预留高度。展开内容自然溢出到页面，不挤压结果、不嵌套滚动。 */
+#failSec { height: 34px; margin-top: 10px; }
+#failSec details { padding: 6px 10px; margin-bottom: 12px; }
+#failSummary { line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.failList { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; margin: 8px 0 0; padding-left: 18px; overflow-wrap: anywhere; }
 .failList span { color: var(--muted); margin-right: 8px; }
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #111827; color: #fff; padding: 8px 14px; border-radius: 6px; font-size: 13px; }
 
@@ -86,37 +96,32 @@ summary { cursor: pointer; }
 .vol dl { grid-column: 1 / -1; }
 .vol dl div { display: flex; align-items: baseline; gap: 6px; }
 .vol dd { font-size: 12px; }
-.resultTabs { display: flex; gap: 4px; align-items: center; margin-top: 18px; border-bottom: 1px solid var(--line); }
-.resultTabs button { border: 0; background: transparent; border-radius: 0; padding: 10px 20px; color: var(--muted); border-bottom: 2px solid transparent; }
+.resultTabs { display: flex; gap: 4px; align-items: center; margin-top: 8px; border-bottom: 1px solid var(--line); }
+.resultTabs button { border: 0; background: transparent; border-radius: 0; padding: 6px 20px; color: var(--muted); border-bottom: 2px solid transparent; }
 .resultTabs button.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
 .resultTabs > span { margin-left: auto; color: var(--muted); font-size: 12px; }
-#graphView { margin-top: 12px; }
+#graphView { flex: 1; min-height: 260px; display: flex; margin-top: 12px; }
 .graphPanel { --graph-bg: #262a31; --graph-line: #3c414a; --graph-text: #f2f3f6; --graph-muted: #a3aab6;
+  flex: 1; min-width: 0; display: flex; flex-direction: column;
   background: var(--graph-bg); color: var(--graph-text); border: 1px solid #343a44; border-radius: 12px; overflow: hidden; color-scheme: dark; }
 .graphPanel button { background: transparent; border-color: var(--graph-line); color: var(--graph-text); }
 .graphPanel button:focus-visible, .legendRow:focus-visible, #sunburst [role=button]:focus-visible { outline: 2px solid #91b7ff; outline-offset: 3px; }
-.graphToolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 14px 18px 8px; }
+.graphToolbar { flex: none; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 10px 18px 8px; }
 .graphModes { display: flex; padding: 3px; border: 1px solid var(--graph-line); border-radius: 8px; background: #20242b; }
 .graphModes button { border: 0; padding: 5px 14px; color: var(--graph-muted); }
 .graphModes button.active { background: #3e6ba5; color: #fff; }
 .graphFilters { display: flex; align-items: center; gap: 16px; font-size: 12px; color: var(--graph-muted); }
 .graphFilters input { width: 70px; padding: 3px 6px; background: #20242b; border-color: var(--graph-line); color: #fff; }
-.graphNavigation { display: flex; align-items: center; gap: 6px; padding: 4px 18px; }
+.graphNavigation { flex: none; display: flex; align-items: center; gap: 6px; padding: 4px 18px; }
 .graphNavigation > button { font-size: 24px; line-height: 1; padding: 2px 10px; border: 0; }
 #graphBreadcrumbs { display: flex; gap: 5px; align-items: center; overflow-x: auto; white-space: nowrap; font-size: 12px; }
 #graphBreadcrumbs button { border: 0; background: #323943; padding: 4px 10px; max-width: 220px; text-overflow: ellipsis; overflow: hidden; flex-shrink: 0; }
 #graphBreadcrumbs button:last-child { background: #3e6ba5; }
-.graphWorkspace { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(280px, 1fr); gap: 22px; padding: 2px 24px 12px; }
-.graphCanvas { position: relative; display: flex; flex-direction: column; align-items: center; min-width: 0; }
-#sunburst { width: 100%; height: min(43vh, 460px); min-height: 280px; overflow: visible; }
+.graphWorkspace { flex: 1; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1.5fr) minmax(280px, 1fr); gap: 22px; padding: 2px 24px 12px; }
+.graphCanvas { position: relative; display: flex; flex-direction: column; align-items: center; min-width: 0; min-height: 0; }
+#sunburst { flex: 1; width: 100%; height: 0; min-height: 0; overflow: hidden; }
 .volumeSection { margin: 4px 0 8px; padding: 4px 10px; }
 .volumeSection > summary { cursor: pointer; font-weight: 600; padding: 2px 0; }
-body[data-view=graph] .top { padding: 10px 20px; }
-body[data-view=graph] .brand { margin-bottom: 6px; }
-body[data-view=graph] #rootList { margin-bottom: 4px; }
-body[data-view=graph] .status { margin-top: 4px; }
-body[data-view=graph] .resultTabs { margin-top: 8px; }
-body[data-view=graph] .resultTabs button { padding: 6px 20px; }
 #volumeSummary { margin-left: 14px; color: var(--muted); font-size: 12px; font-weight: 400; }
 .volumeSection[open] .volumes { margin-top: 8px; }
 #sunburst path { stroke: var(--graph-bg); stroke-width: .8; cursor: pointer; }
@@ -138,17 +143,17 @@ body[data-view=graph] .resultTabs button { padding: 6px 20px; }
 .graphCenter .centerValue { font-size: 35px; font-weight: 500; }
 .graphCenter .centerUnit { font-size: 22px; }
 .graphCenter .centerBack { font-size: 11px; fill: var(--graph-muted); }
-.graphGuide { color: var(--graph-muted); font-size: 11px; text-align: center; margin: 0 0 4px; }
+.graphGuide { flex: none; color: var(--graph-muted); font-size: 11px; text-align: center; margin: 0 0 4px; }
 .graphEmpty { position: absolute; inset: 20% 0 25%; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; text-align: center; background: radial-gradient(circle, #313946 0, #262a31 62%); }
 .graphEmpty strong { font-size: 22px; font-weight: 500; }
 .graphEmpty span { font-size: 13px; color: var(--graph-muted); max-width: 80%; word-break: break-word; }
 .graphTooltip { position: absolute; left: 0; top: 0; z-index: 3; pointer-events: none; background: #11161ef2; border: 1px solid #4b5565; border-radius: 6px; padding: 6px 10px; font-size: 12px; max-width: 280px; word-break: break-all; box-shadow: 0 4px 14px #0004; will-change: transform; }
-.graphSidebar { padding-top: 14px; min-width: 0; max-height: max(280px, min(43vh, 460px)); overflow-y: auto; }
+.graphSidebar { padding: 8px 8px 0 0; min-width: 0; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
 .graphHeading { display: flex; align-items: baseline; gap: 10px; justify-content: space-between; }
 .graphHeading h2 { font-size: 19px; font-weight: 500; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .graphHeading > strong { font-size: 21px; font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.graphPath { color: var(--graph-muted); font-size: 11px; word-break: break-all; margin: 4px 0 12px; max-height: 48px; overflow: auto; }
-.graphLegend { max-height: min(32vh, 280px); min-height: 90px; overflow: auto; }
+.graphPath { color: var(--graph-muted); font-size: 11px; word-break: break-all; margin: 4px 0 12px; }
+.graphLegend { min-height: 0; }
 .legendRow { display: flex; align-items: center; gap: 9px; padding: 6px 8px; cursor: pointer; border-radius: 5px; font-size: 13px; }
 .legendRow > i { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 .legendRow > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -176,13 +181,13 @@ body.fileDropReady, body.fileDropReady * { cursor: copy !important; }
 .graphDetail { border-top: 1px solid var(--graph-line); margin-top: 12px; padding-top: 10px; min-height: 104px; }
 .graphDetail h3 { font-size: 15px; margin: 0 0 4px; word-break: break-all; }
 .graphDetail p { color: var(--graph-muted); font-size: 12px; margin: 5px 0; }
-.graphDetail .detailPath { font-size: 11px; word-break: break-all; max-height: 42px; overflow: auto; }
+.graphDetail .detailPath { font-size: 11px; word-break: break-all; }
 .detailSize { font-size: 22px; font-variant-numeric: tabular-nums; }
 .detailSize span { color: var(--graph-muted); font-size: 12px; margin-left: 8px; }
 .detailActions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 .detailActions button { font-size: 12px; padding: 4px 10px; }
 .graphPanel button.trash { color: #ff8b92; padding: 4px 10px; }
-.collector { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 14px 20px; background: #20242b; border-top: 1px solid var(--graph-line); }
+.collector { flex: none; display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; padding: 10px 20px; background: #20242b; border-top: 1px solid var(--graph-line); }
 .collector.dragover { background: #253f3d; box-shadow: inset 0 0 0 2px #5ff3bd; }
 .collectorMark { border: 2px solid #4c6779; border-radius: 50%; font-size: 29px; color: #7594a9; line-height: 40px; width: 44px; text-align: center; }
 .collectorSummary { flex: 1; min-width: 220px; }
@@ -200,8 +205,32 @@ body.fileDropReady, body.fileDropReady * { cursor: copy !important; }
   .graphHeading > strong { font-size: 17px; }
   .resultTabs > span { display: none; }
 }
+@media (max-height: 650px) {
+  .top { padding: 6px 16px; }
+  .brand { margin-bottom: 4px; }
+  .logo { font-size: 18px; }
+  main { padding: 6px 16px 8px; }
+  .volumeSection { margin-bottom: 4px; }
+  .volumeSection[open] .volumes { margin-top: 4px; }
+  .vol { padding: 4px 10px; gap: 0 12px; }
+  .vol .pct { font-size: 16px; }
+  .resultTabs { margin-top: 4px; }
+  .resultTabs button { padding: 4px 16px; }
+  #graphView, #listView { margin-top: 8px; }
+  #graphView { min-height: 230px; }
+  #listView { min-height: 190px; gap: 8px; }
+  .secHead { gap: 8px; margin-bottom: 4px; }
+  .graphToolbar { padding: 6px 14px; }
+  .collector { padding: 8px 14px; }
+  .collectorMark { width: 34px; line-height: 30px; font-size: 23px; }
+  #failSec { margin-top: 8px; }
+}
 @media (max-width: 700px) {
-  .graphWorkspace { grid-template-columns: 1fr; }
-  .graphSidebar { padding: 0 8px 12px; max-height: none; }
-  #sunburst { height: 420px; }
+  /* 极窄窗口改为自然页面流，确保控件仍可访问。 */
+  body { height: auto; min-height: 100vh; }
+  #graphView, #listView { flex: none; }
+  #listView { grid-template-rows: repeat(2, 320px); }
+  .graphWorkspace { grid-template-columns: 1fr; grid-template-rows: auto auto; }
+  .graphSidebar { padding: 0 8px 12px; overflow: visible; }
+  #sunburst { flex: none; height: 320px; }
 }
