@@ -54,6 +54,12 @@
       <div class="graphWorkspace">
         <div class="graphCanvas">
           <svg id="sunburst" viewBox="0 0 640 640" role="group" aria-label="目录占用环形图"></svg>
+          <div id="graphZoom" class="graphZoom" role="group" aria-label="时间线缩放" hidden>
+            <button id="graphZoomOut" aria-label="缩小时间线" title="缩小" disabled>−</button>
+            <output id="graphZoomLevel" aria-label="缩放比例">100%</output>
+            <button id="graphZoomIn" aria-label="放大时间线" title="放大">＋</button>
+            <button id="graphZoomReset" title="恢复完整时间线" disabled>复位</button>
+          </div>
           <div id="graphEmpty" class="graphEmpty"><strong>看清每一份空间</strong><span>添加目录并扫描，即可查看占用分布</span></div>
           <div id="graphTooltip" class="graphTooltip" hidden></div>
           <p id="graphGuide" class="graphGuide">悬停查看详情 · 点击目录深入 · 点击圆心返回上层</p>

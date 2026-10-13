@@ -128,6 +128,12 @@ summary { cursor: pointer; }
 #graphHover, #graphHover * { pointer-events: none; }
 #graphView[data-mode=files] .graphNavigation { display: none; }
 #sunburst .bubble { cursor: pointer; transition: opacity .12s; }
+#sunburst.zoomed { cursor: grab; }
+#sunburst.panning, #sunburst.panning * { cursor: grabbing; }
+.graphZoom { position: absolute; top: 4px; left: 4px; z-index: 1; display: flex; align-items: center; gap: 2px;
+  padding: 3px; border: 1px solid var(--graph-line); border-radius: 6px; background: #20242bef; }
+.graphZoom button { border: 0; padding: 2px 8px; font-size: 12px; }
+.graphZoom output { min-width: 42px; text-align: center; color: var(--graph-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 #sunburst .bubble circle { stroke: var(--graph-bg); stroke-width: 1.2; }
 #sunburst.dim .bubble:not(.on) { opacity: .22; }
 #sunburst .bubble.on circle { stroke: #fff; stroke-width: 1.8; }

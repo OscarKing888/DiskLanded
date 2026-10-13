@@ -43,7 +43,7 @@ function hoverHarness() {
       attrs, hidden: true, style: {},
       setAttribute(k,v) { counters.writes++; attrs.set(k,v); },
       removeAttribute(k) { counters.writes++; attrs.delete(k); },
-      classList: { add() { counters.writes++; }, remove() { counters.writes++; } },
+      classList: { add() { counters.writes++; }, remove() { counters.writes++; }, toggle() { counters.writes++; } },
       querySelectorAll() { return []; },
       set innerHTML(v) { counters.detail++; this.html = v; },
       set textContent(v) { counters.text++; this.text = v; },
@@ -250,4 +250,56 @@ test('collecting skips directories and adds a folder group of new files at once'
   assert.match(h.counters.toast,/2 个文件/);
   h.exports.DiskGraph.prototype.removeCollected.call(h.graph,'/u/a/1.bin');
   assert.deepEqual([...h.graph.collected.keys()],['/u/a/2.bin']);
+});
+
+test('timeline zoom keeps the pointed bubble at the same screen position', () => {
+  const {zoomTimelineView}=require('./dist/graph.js');
+  for (const anchor of [{x:80,y:35},{x:450,y:220},{x:870,y:410}]) {
+    let view={scale:1,x:0,y:0};
+    const before={x:anchor.x,y:anchor.y};
+    for (const factor of [1.5,2,1.25,0.8]) {
+      view=zoomTimelineView(view,factor,anchor);
+      assert(Math.abs((anchor.x-view.x)*view.scale-before.x)<1e-8);
+      assert(Math.abs((anchor.y-view.y)*view.scale-before.y)<1e-8);
+    }
+    view=zoomTimelineView(view,1/view.scale,anchor);
+    assert.deepEqual(view,{scale:1,x:0,y:0});
+  }
+});
+
+test('timeline zoom and pan stay inside the full plot and enforce scale limits', () => {
+  const {zoomTimelineView,clampTimelineView,timelineBox}=require('./dist/graph.js');
+  let view=zoomTimelineView({scale:1,x:0,y:0},100,{x:900,y:440});
+  assert.equal(view.scale,16);
+  for (const [x,y] of [[-1000,-1000],[10000,10000],[-1000,10000]]) {
+    const pan=clampTimelineView({...view,x,y});
+    assert(pan.x>=0 && pan.x+timelineBox.width/pan.scale<=timelineBox.width);
+    assert(pan.y>=0 && pan.y+timelineBox.height/pan.scale<=timelineBox.height);
+  }
+  view=zoomTimelineView(view,0.0001,{x:-100,y:999});
+  assert.deepEqual(view,{scale:1,x:0,y:0});
+});
+
+test('zoom updates the viewport without rebuilding bubbles or changing selection and collection', () => {
+  const h=hoverHarness(), selected=h.nodes[0];
+  Object.assign(h.graph,{mode:'files',data:{files:[selected]},timelineView:{scale:1,x:0,y:0},
+    selected,collected:new Map([[selected.path,selected]])});
+  h.graph.queueHover(selected,{x:100,y:120});
+  const details=h.counters.detail;
+  h.graph.zoomTimeline(2,{x:450,y:220});
+  assert.equal(h.$('sunburst').attrs.get('viewBox'),'225 110 450 220');
+  assert.equal(h.$('graphZoomLevel').text,'200%');
+  assert.equal(h.counters.detail,details,'wheel input must not rebuild bubble DOM or details');
+  assert.equal(h.frames.size,0,'zoom must discard pending hover coordinates');
+  assert.equal(h.graph.selected,selected);
+  assert.equal(h.graph.collected.get(selected.path),selected);
+  h.graph.resetTimelineZoom();
+  assert.equal(h.$('sunburst').attrs.get('viewBox'),'0 0 900 440');
+  assert(h.$('graphZoomReset').disabled);
+  h.graph.mode='dirs';
+  h.graph.zoomTimeline(4);
+  assert.equal(h.graph.timelineView.scale,1);
+  h.graph.mode='files'; h.graph.data={files:[]};
+  h.graph.zoomTimeline(4);
+  assert.equal(h.graph.timelineView.scale,1);
 });

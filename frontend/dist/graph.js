@@ -67,6 +67,17 @@ function graphMarkup(segments) {
 // ---------- 新出现的文件：时间线气泡图 ----------
 // 横轴为出现日期，圆面积表示分配大小，颜色区分文件所在目录。
 const timelineBox = { width: 900, height: 440, left: 30, right: 30, top: 16, axis: 396 };
+const timelineMaxZoom = 16;
+function clampTimelineView(view) {
+  const scale = Math.max(1, Math.min(timelineMaxZoom, view.scale));
+  return { scale, x: Math.max(0, Math.min(timelineBox.width * (1 - 1 / scale), view.x)),
+    y: Math.max(0, Math.min(timelineBox.height * (1 - 1 / scale), view.y)) };
+}
+function zoomTimelineView(view, factor, anchor) {
+  const scale = Math.max(1, Math.min(timelineMaxZoom, view.scale * factor));
+  return clampTimelineView({ scale, x: anchor.x - (anchor.x - view.x) * view.scale / scale,
+    y: anchor.y - (anchor.y - view.y) * view.scale / scale });
+}
 const timelineLimit = 300, timelineGroups = 9, timelineOtherColor = "#787e8a";
 function splitPath(path) {
   const cut = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
@@ -169,6 +180,7 @@ class DiskGraph {
     this.hoverFrame = 0;
     this.tooltipNode = null;
     this.tooltipBounds = null;
+    this.timelineView = { scale: 1, x: 0, y: 0 };
     this.bind();
     this.renderCollector();
   }
@@ -182,13 +194,14 @@ class DiskGraph {
       if (button) this.navigate(button.dataset.path);
     };
     const hoverSector = (e) => {
+      if (this.timelinePanning) return;
       const target = e.target.closest("[data-node]");
       this.queueHover(target ? this.segments[+target.dataset.node].node : this.selected,
         target ? { x: e.clientX, y: e.clientY } : null);
     };
     $("sunburst").addEventListener("pointerover", hoverSector);
     $("sunburst").addEventListener("pointermove", hoverSector);
-    $("sunburst").addEventListener("pointerleave", () => this.queueHover(this.selected));
+    $("sunburst").addEventListener("pointerleave", () => { if (!this.timelinePanning) this.queueHover(this.selected); });
     const invalidateBounds = () => { this.tooltipBounds = null; };
     window.addEventListener("resize", invalidateBounds);
     window.addEventListener("scroll", invalidateBounds, true);
@@ -221,6 +234,7 @@ class DiskGraph {
       const reveal = e.target.closest("[data-reveal]");
       if (reveal) { try { await api().Reveal(reveal.dataset.reveal); } catch (err) { toast(String(err)); } }
     };
+    this.bindTimelineZoom();
     this.bindFileDrag();
     $("collectorClear").onclick = () => { this.collected.clear(); this.renderCollector(); };
     $("collectorItems").onclick = (e) => {
@@ -228,6 +242,81 @@ class DiskGraph {
       if (button && !trashing) { this.collected.delete(button.dataset.remove); this.renderCollector(); }
     };
     $("collectorTrash").onclick = () => this.trashCollected();
+  }
+  bindTimelineZoom() {
+    const svg = $("sunburst");
+    const svgPoint = (e, inverse) => new DOMPoint(e.clientX, e.clientY).matrixTransform(inverse);
+    svg.addEventListener("wheel", (e) => {
+      if (this.mode !== "files" || !this.data?.files?.length) return;
+      e.preventDefault();
+      if (this.timelinePanning || document.body.classList.contains("fileDragging")) return;
+      const matrix = svg.getScreenCTM();
+      if (!matrix) return;
+      // CTM 同时处理 SVG 等比缩放产生的留白与窗口缩放，保持鼠标指向的位置不动。
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? svg.clientHeight : 1;
+      const delta = Math.max(-240, Math.min(240, e.deltaY * unit));
+      this.zoomTimeline(Math.exp(-delta * 0.002), svgPoint(e, matrix.inverse()));
+      const node = this.nodeFromElement(document.elementFromPoint(e.clientX, e.clientY));
+      this.queueHover(node || this.selected, node ? { x: e.clientX, y: e.clientY } : null);
+    }, { passive: false });
+    $("graphZoomIn").onclick = () => this.zoomTimeline(1.5);
+    $("graphZoomOut").onclick = () => this.zoomTimeline(1 / 1.5);
+    $("graphZoomReset").onclick = () => this.resetTimelineZoom();
+
+    // 空白处拖动用于平移；从气泡开始拖动仍然是加入待删除文件。
+    let pan = null, suppressClick = false;
+    svg.addEventListener("pointerdown", (e) => {
+      if (this.mode !== "files" || this.timelineView.scale === 1 || e.button !== 0 || e.ctrlKey || e.target.closest("[data-node]")) return;
+      const matrix = svg.getScreenCTM();
+      if (!matrix) return;
+      const inverse = matrix.inverse();
+      pan = { pointerId: e.pointerId, inverse, point: svgPoint(e, inverse), view: this.timelineView, x: e.clientX, y: e.clientY };
+      e.preventDefault();
+    });
+    const finish = () => {
+      if (this.timelinePanning) {
+        suppressClick = true;
+        setTimeout(() => { suppressClick = false; }, 0);
+      }
+      pan = null; this.timelinePanning = false;
+      svg.classList.remove("panning");
+    };
+    svg.addEventListener("pointermove", (e) => {
+      if (!pan || e.pointerId !== pan.pointerId) return;
+      if (!e.buttons) { finish(); return; }
+      if (!this.timelinePanning && Math.hypot(e.clientX - pan.x, e.clientY - pan.y) <= 4) return;
+      this.timelinePanning = true;
+      svg.setPointerCapture(e.pointerId); svg.classList.add("panning");
+      const point = svgPoint(e, pan.inverse);
+      this.timelineView = clampTimelineView({ scale: pan.view.scale, x: pan.view.x - point.x + pan.point.x, y: pan.view.y - point.y + pan.point.y });
+      this.applyTimelineView();
+    });
+    for (const event of ["pointerup", "pointercancel", "lostpointercapture"]) svg.addEventListener(event, finish);
+    svg.addEventListener("click", (e) => {
+      if (suppressClick) { e.preventDefault(); e.stopImmediatePropagation(); }
+    }, true);
+  }
+  zoomTimeline(factor, anchor) {
+    if (this.mode !== "files" || !this.data?.files?.length) return;
+    const view = this.timelineView;
+    anchor ||= { x: view.x + timelineBox.width / view.scale / 2, y: view.y + timelineBox.height / view.scale / 2 };
+    this.timelineView = zoomTimelineView(view, factor, anchor);
+    this.applyTimelineView();
+  }
+  resetTimelineZoom() {
+    this.timelineView = { scale: 1, x: 0, y: 0 };
+    this.applyTimelineView();
+  }
+  applyTimelineView() {
+    this.cancelHover();
+    const view = this.timelineView, files = this.mode === "files", ready = files && !!this.data?.files?.length;
+    if (files) $("sunburst").setAttribute("viewBox", `${view.x} ${view.y} ${timelineBox.width / view.scale} ${timelineBox.height / view.scale}`);
+    $("graphZoom").hidden = !files;
+    $("graphZoomLevel").textContent = Math.round(view.scale * 100) + "%";
+    $("graphZoomOut").disabled = !ready || view.scale <= 1;
+    $("graphZoomIn").disabled = !ready || view.scale >= timelineMaxZoom;
+    $("graphZoomReset").disabled = !ready || view.scale === 1;
+    $("sunburst").classList.toggle("zoomed", files && view.scale > 1);
   }
   queueHover(node, point = null) {
     this.pendingHover = { node, point };
@@ -350,13 +439,15 @@ class DiskGraph {
     // 两种模式使用不同的图形：目录占用为环形层级图，新出现的文件为时间线气泡图。
     const files = this.mode === "files";
     $("graphView").dataset.mode = this.mode;
-    $("graphGuide").textContent = files ? "横轴为出现日期 · 圆面积表示文件大小 · 颜色区分所在目录 · 点击文件查看详情" : "悬停查看详情 · 点击目录深入 · 点击圆心返回上层";
+    $("graphGuide").textContent = files ? "滚轮缩放 · 拖动空白平移 · 点击文件查看详情" : "悬停查看详情 · 点击目录深入 · 点击圆心返回上层";
     $("sunburst").setAttribute("viewBox", files ? `0 0 ${timelineBox.width} ${timelineBox.height}` : "0 0 640 640");
     $("sunburst").setAttribute("aria-label", files ? "新出现文件时间线" : "目录占用环形图");
+    this.resetTimelineZoom();
   }
   reset() {
     this.cancelHover(); this.detailState = null;
     ++this.request; this.data = null; this.selected = null; this.hoverElements = null; this.bubbleByNode = null;
+    this.resetTimelineZoom();
     this.history = { dirs: { paths: [""], index: 0 }, files: { paths: [""], index: 0 } };
     this.collected.clear(); this.renderCollector();
     $("sunburst").innerHTML = ""; $("graphLegend").innerHTML = "";
@@ -577,4 +668,4 @@ class DiskGraph {
   }
 }
 
-if (typeof module !== "undefined" && module.exports) module.exports = { graphSize, sectorPath, graphSegments, graphMarkup, graphColor, graphOtherColor, fileTimeline, timelineLayout, timelineMarkup, timelineBox, DiskGraph };
+if (typeof module !== "undefined" && module.exports) module.exports = { graphSize, sectorPath, graphSegments, graphMarkup, graphColor, graphOtherColor, fileTimeline, timelineLayout, timelineMarkup, timelineBox, clampTimelineView, zoomTimelineView, DiskGraph };
