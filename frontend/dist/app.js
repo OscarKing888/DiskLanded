@@ -12,7 +12,6 @@ const graph = new DiskGraph();
 
 function setResultView(view) {
   document.body.dataset.view = view;
-  $("volumeSection").open = view === "list";
   for (const mode of ["graph", "list"]) {
     const active = mode === view, tab = $(mode + "Tab");
     tab.classList.toggle("active", active);
